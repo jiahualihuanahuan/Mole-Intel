@@ -1,0 +1,7 @@
+node_modules
+.output
+.vercel
+.grok
+screenshots
+artifacts
+*.log

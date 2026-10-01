@@ -1,0 +1,9 @@
+node_modules
+.output
+.vercel
+.git
+.grok
+screenshots
+artifacts
+*.log
+npm-debug.log
