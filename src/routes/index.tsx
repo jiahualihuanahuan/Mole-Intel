@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { universe, type UniverseRow } from "@/data/universe"
 import { getCompanyBrief, getNewsBatch, type CompanyBrief, type Headline } from "@/lib/intel.functions"
+import { askLocalModel, type LocalReview } from "@/lib/local-llm"
 
 export const Route = createFileRoute("/")({ component: Home })
 
@@ -18,6 +19,13 @@ function Home() {
   const [selected, setSelected] = useState<UniverseRow | null>(universe[0] ?? null)
   const [brief, setBrief] = useState<CompanyBrief | null>(null)
   const [briefState, setBriefState] = useState<"idle" | "loading" | "error">("idle")
+  const [endpoint, setEndpoint] = useState("http://127.0.0.1:8080/v1")
+  const [modelName, setModelName] = useState("")
+  const [settingsReady, setSettingsReady] = useState(false)
+  const [armed, setArmed] = useState(false)
+  const [review, setReview] = useState<LocalReview | null>(null)
+  const [reviewState, setReviewState] = useState<"idle" | "loading" | "error">("idle")
+  const [reviewError, setReviewError] = useState("")
   const checked = useRef(new Set<string>())
   const fetchNewsRef = useRef(fetchNews)
   fetchNewsRef.current = fetchNews
@@ -35,6 +43,21 @@ function Home() {
   const ndxCount = universe.filter((row) => row.priority === 0).length
   const spxCount = universe.length - ndxCount
   const checkedNdx = universe.filter((row) => row.priority === 0 && news[row.ticker]).length
+
+  useEffect(() => {
+    const saved = localStorage.getItem("mole-intel-llm")
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as { endpoint?: string; model?: string }
+        if (parsed.endpoint) setEndpoint(parsed.endpoint)
+        if (typeof parsed.model === "string") setModelName(parsed.model)
+        setArmed(true)
+      } catch {
+        localStorage.removeItem("mole-intel-llm")
+      }
+    }
+    setSettingsReady(true)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -62,9 +85,7 @@ function Home() {
           return next
         })
       } catch {
-        if (!cancelled) {
-          pending.forEach((row) => checked.current.delete(row.ticker))
-        }
+        if (!cancelled) pending.forEach((row) => checked.current.delete(row.ticker))
       }
       if (!cancelled && rows.some((row) => !checked.current.has(row.ticker))) {
         timer = window.setTimeout(() => void pump(), 350)
@@ -82,6 +103,9 @@ function Home() {
     let cancelled = false
     setBriefState("loading")
     setBrief(null)
+    setReview(null)
+    setReviewState("idle")
+    setReviewError("")
     fetchBrief({ data: { ticker: selected.ticker, name: selected.name } })
       .then((value) => {
         if (!cancelled) {
@@ -97,6 +121,41 @@ function Home() {
     }
   }, [selected, fetchBrief])
 
+  useEffect(() => {
+    if (!settingsReady || !armed || !brief) return
+    let cancelled = false
+    setReviewState("loading")
+    setReviewError("")
+    askLocalModel(endpoint, modelName, brief)
+      .then((value) => {
+        if (!cancelled) {
+          setReview(value)
+          setReviewState("idle")
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setReviewState("error")
+          setReviewError(error instanceof Error ? error.message : "The local model did not answer")
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [armed, brief, endpoint, modelName, settingsReady])
+
+  function saveModel() {
+    const next = endpoint.trim()
+    if (!/^https?:\/\//i.test(next)) {
+      setReviewState("error")
+      setReviewError("The model address must start with http:// or https://")
+      return
+    }
+    localStorage.setItem("mole-intel-llm", JSON.stringify({ endpoint: next, model: modelName.trim() }))
+    setEndpoint(next)
+    setArmed(true)
+  }
+
   return (
     <main className="min-h-screen">
       <header className="border-b border-line px-4 py-5 sm:px-8">
@@ -106,8 +165,8 @@ function Home() {
             <h1 className="font-display text-4xl text-ink">Mole Intel</h1>
           </div>
           <p className="max-w-xl text-sm leading-relaxed text-muted">
-            Nasdaq 100 is checked first, then the rest of the S&P 500. Each name is matched to its latest
-            investor-relations wire or news item, and the filing still outranks the headline.
+            Nasdaq 100 is checked first, then the rest of the S&P 500. Source judgment is written by your local
+            model. Filings still outrank a headline.
           </p>
         </div>
       </header>
@@ -184,7 +243,35 @@ function Home() {
             </p>
           )}
         </section>
-        <aside className="px-4 py-4 sm:px-6">
+        <aside className="space-y-3 px-4 py-4 sm:px-6">
+          <div className="rounded-2xl border border-line bg-surface p-4">
+            <h2 className="text-xs tracking-wide text-muted">Local model</h2>
+            <p className="mt-1 text-sm text-muted">
+              OpenAI-compatible address on your machine. llama.cpp is usually port 8080. Ollama is usually 11434.
+            </p>
+            <label className="mt-3 block text-xs text-muted" htmlFor="llm-endpoint">
+              Address
+            </label>
+            <input
+              id="llm-endpoint"
+              value={endpoint}
+              onChange={(event) => setEndpoint(event.target.value)}
+              className="mt-1 min-h-11 w-full rounded-xl border border-line bg-bg px-3 text-sm"
+            />
+            <label className="mt-3 block text-xs text-muted" htmlFor="llm-model">
+              Model name, optional
+            </label>
+            <input
+              id="llm-model"
+              value={modelName}
+              onChange={(event) => setModelName(event.target.value)}
+              placeholder="Leave blank to use the first loaded model"
+              className="mt-1 min-h-11 w-full rounded-xl border border-line bg-bg px-3 text-sm"
+            />
+            <button type="button" onClick={saveModel} className="mt-3 min-h-11 rounded-xl bg-ink px-3 text-sm text-surface">
+              Use this model
+            </button>
+          </div>
           {selected && (
             <div className="rounded-2xl border border-line bg-surface p-4">
               <p className="text-xs tracking-wide text-muted">{selected.index}</p>
@@ -211,7 +298,7 @@ function Home() {
                         <li className="text-sm text-muted">No wire came back for this name.</li>
                       )}
                       {brief.headlines.map((item) => (
-                        <li key={item.link} className="text-sm">
+                        <li key={item.link || item.title} className="text-sm">
                           <a href={item.link} target="_blank" rel="noreferrer" className="text-pine underline">
                             {item.title}
                           </a>
@@ -224,15 +311,38 @@ function Home() {
                     </ul>
                   </div>
                   <div>
-                    <h3 className="text-xs tracking-wide text-muted">Source test</h3>
-                    <ul className="mt-2 space-y-2">
-                      {brief.rubric.map((item) => (
-                        <li key={item.question} className="text-sm">
-                          <span className="font-medium">{item.question}. </span>
-                          <span className="text-muted">{item.note}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <h3 className="text-xs tracking-wide text-muted">Source test from your model</h3>
+                    {reviewState === "loading" && <p className="mt-2 text-sm text-muted">Asking your local model…</p>}
+                    {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
+                    {!armed && reviewState === "idle" && (
+                      <p className="mt-2 text-sm text-muted">Save the model address. The next company packet goes to it.</p>
+                    )}
+                    {review && (
+                      <div className="mt-2 space-y-2">
+                        <p className="text-sm leading-relaxed">{review.summary}</p>
+                        <ul className="space-y-2">
+                          {review.scores.map((item) => (
+                            <li key={item.question} className="text-sm">
+                              <span
+                                className={
+                                  "mr-2 rounded-full px-2 py-0.5 text-xs " +
+                                  (item.score === "pass"
+                                    ? "bg-pine text-surface"
+                                    : item.score === "fail"
+                                      ? "bg-accent text-surface"
+                                      : "bg-chip text-ink")
+                                }
+                              >
+                                {item.score}
+                              </span>
+                              <span className="font-medium">{item.question}. </span>
+                              <span className="text-muted">{item.note}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-xs text-muted">Answered by {review.model}</p>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Recent filings</h3>
@@ -272,8 +382,7 @@ function FilterButton({
       type="button"
       onClick={onClick}
       className={
-        "min-h-11 rounded-xl px-3 text-sm " +
-        (active ? "bg-ink text-surface" : "border border-line bg-surface text-ink")
+        "min-h-11 rounded-xl px-3 text-sm " + (active ? "bg-ink text-surface" : "border border-line bg-surface text-ink")
       }
     >
       {children}
