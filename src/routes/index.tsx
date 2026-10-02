@@ -325,38 +325,32 @@ function Home() {
                     </ul>
                   </div>
                   <div>
-                    <h3 className="text-xs tracking-wide text-muted">Summary</h3>
+                    <h3 className="text-xs tracking-wide text-muted">Buy-side note</h3>
                     {reviewState === "loading" && (
-                      <p className="mt-2 text-sm text-muted">qwen3.5 is reading the filings and wires…</p>
+                      <p className="mt-2 text-sm text-muted">qwen3.5 is working the name…</p>
                     )}
                     {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
-                    {review?.digest && <p className="mt-2 text-sm leading-relaxed">{review.digest}</p>}
-                  </div>
-                  <div>
-                    <h3 className="text-xs tracking-wide text-muted">Source test from your model</h3>
                     {review && (
-                      <div className="mt-2 space-y-2">
-                        {review.summary && <p className="text-sm leading-relaxed">{review.summary}</p>}
-                        <ul className="space-y-2">
-                          {review.scores.map((item) => (
-                            <li key={item.question} className="text-sm">
-                              <span
-                                className={
-                                  "mr-2 rounded-full px-2 py-0.5 text-xs " +
-                                  (item.score === "pass"
-                                    ? "bg-pine text-surface"
-                                    : item.score === "fail"
-                                      ? "bg-accent text-surface"
-                                      : "bg-chip text-ink")
-                                }
-                              >
-                                {item.score}
-                              </span>
-                              <span className="font-medium">{item.question}. </span>
-                              <span className="text-muted">{item.note}</span>
-                            </li>
-                          ))}
-                        </ul>
+                      <div className="mt-2 space-y-3">
+                        {review.digest && (
+                          <p className="text-sm leading-relaxed">
+                            <span className="font-medium">Recent filings and news. </span>
+                            {review.digest}
+                          </p>
+                        )}
+                        {review.thesis && <p className="text-sm leading-relaxed font-medium">{review.thesis}</p>}
+                        {review.analysis.split(/\n+/).filter(Boolean).map((paragraph) => (
+                          <p key={paragraph.slice(0, 40)} className="text-sm leading-relaxed">
+                            {paragraph}
+                          </p>
+                        ))}
+                        {review.risks && (
+                          <p className="text-sm leading-relaxed">
+                            <span className="font-medium">What could be wrong. </span>
+                            {review.risks}
+                          </p>
+                        )}
+                        {review.gaps && <p className="text-sm leading-relaxed text-muted">{review.gaps}</p>}
                         <p className="text-xs text-muted">Answered by {review.model}</p>
                       </div>
                     )}

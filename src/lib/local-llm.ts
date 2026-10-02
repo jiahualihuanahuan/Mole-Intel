@@ -4,26 +4,13 @@ import type { CompanyBrief } from "@/lib/intel.functions"
 export const DEFAULT_ENDPOINT = "http://192.168.86.35:11434/v1"
 export const DEFAULT_MODEL = "qwen3.5:9b"
 
-export type LocalScore = {
-  question: string
-  score: "pass" | "caution" | "fail"
-  note: string
-}
-
 export type LocalReview = {
   digest: string
-  summary: string
-  scores: LocalScore[]
+  thesis: string
+  analysis: string
+  risks: string
+  gaps: string
   model: string
-}
-
-const QUESTIONS = ["Timeliness", "Expertise", "Bias", "Conflicts", "References and methodology"]
-
-function asScore(value: unknown): LocalScore["score"] {
-  const text = String(value ?? "").toLowerCase()
-  if (text.includes("fail")) return "fail"
-  if (text.includes("pass")) return "pass"
-  return "caution"
 }
 
 function stripThink(raw: string) {
@@ -64,21 +51,24 @@ function scoreFrom(body: string, model: string): LocalReview | null {
     try {
       const parsed = JSON.parse(objects[i]) as {
         digest?: unknown
-        summary?: unknown
-        scores?: { question?: unknown; score?: unknown; note?: unknown }[]
+        thesis?: unknown
+        analysis?: unknown
+        risks?: unknown
+        gaps?: unknown
       }
-      if (!parsed || typeof parsed !== "object" || (!("summary" in parsed) && !("scores" in parsed) && !("digest" in parsed))) continue
-      const scores = Array.isArray(parsed.scores)
-        ? parsed.scores.slice(0, 5).map((item, index) => ({
-            question: String(item.question || QUESTIONS[index] || "Check"),
-            score: asScore(item.score),
-            note: String(item.note || "").slice(0, 400),
-          }))
-        : []
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        (!("digest" in parsed) && !("thesis" in parsed) && !("analysis" in parsed))
+      ) {
+        continue
+      }
       return {
         digest: String(parsed.digest || "").slice(0, 1200),
-        summary: String(parsed.summary || "").slice(0, 700),
-        scores,
+        thesis: String(parsed.thesis || "").slice(0, 500),
+        analysis: String(parsed.analysis || "").slice(0, 4000),
+        risks: String(parsed.risks || "").slice(0, 1200),
+        gaps: String(parsed.gaps || "").slice(0, 800),
         model,
       }
     } catch {
@@ -93,8 +83,10 @@ export function parseLocalReview(raw: string, model: string): LocalReview {
   return (
     found ?? {
       digest: "",
-      summary: stripThink(raw).slice(0, 700) || "The model returned no evaluation.",
-      scores: [],
+      thesis: "",
+      analysis: stripThink(raw).slice(0, 4000) || "The model returned no analysis.",
+      risks: "",
+      gaps: "",
       model,
     }
   )
@@ -119,13 +111,13 @@ async function complete(root: string, model: string, packet: unknown) {
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      max_tokens: 4096,
+      max_tokens: 8192,
       think: true,
       messages: [
         {
           role: "system",
           content:
-            "You evaluate sources for a company research desk. Think through the recent filings and headlines first, then timeliness, expertise, bias, conflicts, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. Do not invent numbers that are not in the packet. After thinking, end with JSON only: {\"digest\": string, \"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. digest is 3 to 5 sentences on what the recent filings and headlines say, naming the form and the date. summary is one sentence on whether those sources can be trusted. Exactly these score questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
+            "You are a senior buy-side equity analyst. Write a deep note on this one company from the packet only. Use the recent filings and headlines as evidence. A headline is not a figure. If a wire and a filing disagree, the filing wins. Do not invent numbers, guidance, valuation, or a price target. If the packet is too thin for a view, say so. Think first. Then end with JSON only: {\"digest\": string, \"thesis\": string, \"analysis\": string, \"risks\": string, \"gaps\": string}. digest is 3 to 5 sentences on what the recent filings and headlines actually say, naming the form and the date. thesis is the variant view in one or two sentences, or an explicit statement that the packet does not support one. analysis is the deep note: what the business setup looks like from these sources, what changed, and what a long or a short would be betting on. risks is what could make that view wrong. gaps is what you still need that this packet does not contain.",
         },
         { role: "user", content: JSON.stringify(packet) },
       ],
@@ -204,6 +196,6 @@ export const askLocalModel = createServerFn({ method: "POST" })
     const content = message?.content ?? ""
     const thought = message?.reasoning || message?.thinking || ""
     const review = readScore(content, model) ?? readScore(`${content}\n${thought}`, model)
-    if (!review) return { ok: false as const, error: "Ollama did not return a source score" }
+    if (!review) return { ok: false as const, error: "Ollama did not return an analysis" }
     return { ok: true as const, review }
   })
