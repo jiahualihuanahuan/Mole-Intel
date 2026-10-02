@@ -290,7 +290,7 @@ function Home() {
                     </div>
                   )}
                   <div>
-                    <h2 className="text-xs tracking-wide text-muted">Buy-side note</h2>
+                    <h2 className="text-xs tracking-wide text-muted">Company read</h2>
                     {reviewState === "loading" && review && (
                       <p className="mt-2 text-sm text-muted">
                         Updating the note. Showing the last one
@@ -305,7 +305,7 @@ function Home() {
                       <div className="mt-2 space-y-3">
                         {review.digest && (
                           <p className="text-sm leading-relaxed">
-                            <span className="font-medium">Recent filings and news. </span>
+                            <span className="font-medium">In the words. </span>
                             {review.digest}
                           </p>
                         )}
@@ -317,7 +317,7 @@ function Home() {
                         ))}
                         {review.risks && (
                           <p className="text-sm leading-relaxed">
-                            <span className="font-medium">What could be wrong. </span>
+                            <span className="font-medium">Where the reading is thin. </span>
                             {review.risks}
                           </p>
                         )}

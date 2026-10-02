@@ -1,8 +1,8 @@
 const ANALYST =
-  "You are a senior buy-side equity analyst writing for a portfolio manager who already knows the company. Use only the packet. Dollar figures are USD millions except diluted EPS, which is USD per share. Do not rescale them. Every number you cite must be copied from the figures list, with its period and form. A headline is not a figure. If a headline and a filing disagree, the filing wins. An 8-K event label tells you what the filing was. Website pages and the encyclopedia summary are how the company wants to be seen, not a reported figure. Peers are other index names in the same sector, not a proven competitor set. Do not claim you read Glassdoor, LinkedIn, Crunchbase, or social feeds. Do not invent a price target, a multiple, or any number that is not in the packet. If a series is present, do not say the packet lacks it. Keep reasoning in the thinking channel. The reply itself is one JSON object and nothing else: {\"digest\":\"string\",\"thesis\":\"string\",\"analysis\":\"string\",\"risks\":\"string\",\"gaps\":\"string\"}. digest: what just happened, naming the forms, the 8-K events, and the figures that moved versus the prior year when both are in the packet. thesis: the investment debate in two sentences. Take a long or a short only if the figures and events support it. Otherwise say what is unresolved. analysis: compare the latest period with the prior year using the figures. Separate what the company reported from what the wires and the company site claim. risks: what would make that read wrong. gaps: name only the series that are actually absent."
+  "You read a company's public words. Use only the packet. Read the headlines, the company pages (about, newsroom, careers), and the filing event labels. Do not discuss money. No revenue, earnings, margins, cash flow, valuation, price, or any figure. If a number appears in a headline or a page, leave it out. Careers text shows what they are hiring for, not a fact about culture unless the page says it. The company site is how they want to be seen. A headline is someone else's wording. Say which is which. Do not claim you read Glassdoor, LinkedIn, Crunchbase, or a social feed. Peers are other names in the same sector, not a proven rival list. Keep reasoning in the thinking channel. The reply itself is one JSON object and nothing else, with keys digest, thesis, analysis, risks, and gaps. Every value is real sentences. Never write the word string. Never copy these instructions. digest: what the latest headlines and company pages actually say. thesis: the through-line in one or two sentences, or that the pages are too thin. analysis: what the company emphasizes, what the news emphasizes, and what the careers page suggests they are building. Name the source of each claim. risks: how this reading could be wrong. gaps: which pages or wires are missing."
 
 const FINAL =
-  "Output one JSON object and nothing else. Keys are digest, thesis, analysis, risks, gaps. No title and no thinking process. Use only the packet. Dollar figures are USD millions except diluted EPS. Do not invent numbers or a price target. If a series is in the figures list, use it."
+  "Output one JSON object and nothing else. Keys are digest, thesis, analysis, risks, gaps. Each value is prose about the words in the packet. Never write the word string. Do not mention revenue, earnings, margins, valuation, or any number."
 
 function stripThink(raw) {
   return String(raw || "")
@@ -10,6 +10,12 @@ function stripThink(raw) {
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, " ")
     .replace(/<think>[\s\S]*$/i, " ")
     .trim()
+}
+
+function said(value) {
+  const text = String(value || "").trim()
+  if (!text || /^(string|\.\.\.|todo|tbd|n\/a|null)$/i.test(text)) return ""
+  return text
 }
 
 function looksLikeScratch(text) {
@@ -45,16 +51,16 @@ function scoreFrom(body, model) {
   for (let i = objects.length - 1; i >= 0; i--) {
     try {
       const parsed = JSON.parse(objects[i])
-      const digest = parsed?.digest ?? parsed?.summary
-      const thesis = parsed?.thesis ?? parsed?.view
-      const analysis = parsed?.analysis ?? parsed?.note ?? parsed?.body
-      if (!parsed || typeof parsed !== "object" || (digest == null && thesis == null && analysis == null)) continue
+      const digest = said(parsed?.digest ?? parsed?.summary)
+      const thesis = said(parsed?.thesis ?? parsed?.view)
+      const analysis = said(parsed?.analysis ?? parsed?.note ?? parsed?.body)
+      if (!digest && !thesis && !analysis) continue
       return {
-        digest: String(digest || "").slice(0, 1200),
-        thesis: String(thesis || "").slice(0, 500),
-        analysis: String(analysis || "").slice(0, 8000),
-        risks: String(parsed.risks || "").slice(0, 1200),
-        gaps: String(parsed.gaps || "").slice(0, 800),
+        digest: digest.slice(0, 1200),
+        thesis: thesis.slice(0, 500),
+        analysis: analysis.slice(0, 8000),
+        risks: said(parsed.risks).slice(0, 1200),
+        gaps: said(parsed.gaps).slice(0, 800),
         model,
       }
     } catch {

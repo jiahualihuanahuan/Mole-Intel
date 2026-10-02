@@ -348,22 +348,14 @@ function spawnNote(
     filings: data.brief.filings.map((item) => ({
       form: item.form,
       filed: item.date,
-      period: item.reportDate || "",
       event: item.items || "",
     })),
-    figures: data.brief.facts ?? [],
     headlines: data.brief.headlines,
-    profile: {
-      sic: data.brief.profile?.sic || "",
-      website: data.brief.profile?.website || "",
-      founded: data.brief.profile?.founded || "",
-      employees: data.brief.profile?.employees || "",
-      summary: data.brief.profile?.summary || "",
-      pages: data.brief.profile?.pages ?? [],
-      peers: data.brief.profile?.peers ?? [],
-    },
-    units:
-      "Dollar figures in the figures list are USD millions, except diluted EPS which is USD per share. Cite the period and the form. Do not rescale.",
+    companyPages: data.brief.profile?.pages ?? [],
+    summary: data.brief.profile?.summary || "",
+    website: data.brief.profile?.website || "",
+    peers: data.brief.profile?.peers ?? [],
+    read: "Words only: news, about, newsroom, and careers. Do not use or mention financial figures.",
   }
   let child: ChildProcess
   try {
