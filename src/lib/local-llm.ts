@@ -130,7 +130,7 @@ function textFrom(payload: unknown) {
   return { content: message?.content ?? "", thought: message?.reasoning || message?.thinking || "" }
 }
 
-async function complete(root: string, model: string, packet: unknown) {
+async function complete(root: string, model: string, packet: unknown, signal: AbortSignal) {
   const url = new URL(root)
   const origin = `${url.protocol}//${url.host}`
   const messages = [
@@ -140,7 +140,7 @@ async function complete(root: string, model: string, packet: unknown) {
   const native = await fetch(`${origin}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(480000),
+    signal,
     body: JSON.stringify({
       model,
       stream: false,
@@ -153,7 +153,7 @@ async function complete(root: string, model: string, packet: unknown) {
   return fetch(`${origin}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(480000),
+    signal,
     body: JSON.stringify({
       model,
       stream: false,
@@ -165,97 +165,181 @@ async function complete(root: string, model: string, packet: unknown) {
   })
 }
 
-export const askLocalModel = createServerFn({ method: "POST" })
-  .validator(
-    (data: { endpoint?: string; model?: string; brief?: CompanyBrief }) => ({
-      endpoint: String(data?.endpoint ?? DEFAULT_ENDPOINT).trim().slice(0, 200),
-      model: String(data?.model ?? DEFAULT_MODEL).trim().slice(0, 80),
-      brief: {
-        name: String(data?.brief?.name ?? "").slice(0, 140),
-        ticker: String(data?.brief?.ticker ?? "").slice(0, 12),
-        entity: String(data?.brief?.entity ?? "").slice(0, 400),
-        filings: (data?.brief?.filings ?? []).slice(0, 6).map((item) => ({
-          form: String(item.form ?? "").slice(0, 20),
-          date: String(item.date ?? "").slice(0, 20),
-          url: String(item.url ?? "").slice(0, 200),
-        })),
-        headlines: (data?.brief?.headlines ?? []).slice(0, 4).map((item) => ({
-          kind: item.kind === "ir" ? ("ir" as const) : ("news" as const),
-          title: String(item.title ?? "").slice(0, 240),
-          source: String(item.source ?? "").slice(0, 80),
-          published: String(item.published ?? "").slice(0, 40),
-        })),
-      },
-    }),
-  )
-  .handler(async ({ data }) => {
-    try {
-      const root = data.endpoint.replace(/\/$/, "")
-      if (!/^https?:\/\//i.test(root)) {
-        return { ok: false as const, error: "The model address must start with http:// or https://" }
-      }
-      const packet = {
-        company: data.brief.name,
-        ticker: data.brief.ticker,
-        entity: data.brief.entity,
-        filings: data.brief.filings.map((item) => `${item.form} ${item.date}`),
-        headlines: data.brief.headlines,
-      }
-      const model = data.model || DEFAULT_MODEL
-      const targets = [root]
-      try {
-        const url = new URL(root)
-        if (url.hostname === "192.168.86.35") {
-          url.hostname = "host.docker.internal"
-          targets.push(url.toString().replace(/\/$/, ""))
-        }
-      } catch {
-        return { ok: false as const, error: "The model address is not a valid URL" }
-      }
-      let response: Response | null = null
-      let failure = `The desk could not reach ${root}.`
-      for (const target of targets) {
-        try {
-          response = await complete(target, model, packet)
-          break
-        } catch (error) {
-          response = null
-          failure = explainFetch(error, target)
-        }
-      }
-      if (!response) return { ok: false as const, error: failure }
-      let raw = ""
-      try {
-        raw = await response.text()
-      } catch (error) {
-        return { ok: false as const, error: explainFetch(error, root) }
-      }
-      if (!response.ok) {
-        return {
-          ok: false as const,
-          error: `Ollama returned ${response.status} for ${model}. ${raw.replace(/\s+/g, " ").slice(0, 240)}`,
-        }
-      }
-      let payload: unknown
-      try {
-        payload = JSON.parse(raw)
-      } catch {
-        return { ok: false as const, error: `Ollama did not return JSON. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
-      }
-      const { content, thought } = textFrom(payload)
-      const review = readScore(content, model) ?? readScore(`${content}\n${thought}`, model)
-      if (!review) {
-        const preview = (content || thought || raw).replace(/\s+/g, " ").slice(0, 240)
-        return {
-          ok: false as const,
-          error: preview ? `Ollama answered, but not with a note. ${preview}` : "Ollama returned an empty reply",
-        }
-      }
-      return { ok: true as const, review }
-    } catch (error) {
-      return {
-        ok: false as const,
-        error: error instanceof Error ? error.message : "The desk lost the model reply",
-      }
+type NoteResult = { ok: true; review: LocalReview } | { ok: false; error: string }
+
+async function writeNote(
+  data: {
+    endpoint: string
+    model: string
+    brief: {
+      name: string
+      ticker: string
+      entity: string
+      filings: { form: string; date: string; url: string }[]
+      headlines: { kind: "ir" | "news"; title: string; source: string; published: string }[]
     }
+  },
+  signal: AbortSignal,
+): Promise<NoteResult> {
+  const root = data.endpoint.replace(/\/$/, "")
+  if (!/^https?:\/\//i.test(root)) {
+    return { ok: false, error: "The model address must start with http:// or https://" }
+  }
+  const packet = {
+    company: data.brief.name,
+    ticker: data.brief.ticker,
+    entity: data.brief.entity,
+    filings: data.brief.filings.map((item) => `${item.form} ${item.date}`),
+    headlines: data.brief.headlines,
+  }
+  const model = data.model || DEFAULT_MODEL
+  const targets = [root]
+  try {
+    const url = new URL(root)
+    if (url.hostname === "192.168.86.35") {
+      url.hostname = "host.docker.internal"
+      targets.push(url.toString().replace(/\/$/, ""))
+    }
+  } catch {
+    return { ok: false, error: "The model address is not a valid URL" }
+  }
+  let response: Response | null = null
+  let failure = `The desk could not reach ${root}.`
+  for (const target of targets) {
+    try {
+      response = await complete(target, model, packet, signal)
+      break
+    } catch (error) {
+      response = null
+      failure = explainFetch(error, target)
+    }
+  }
+  if (!response) return { ok: false, error: failure }
+  let raw = ""
+  try {
+    raw = await response.text()
+  } catch (error) {
+    return { ok: false, error: explainFetch(error, root) }
+  }
+  if (!response.ok) {
+    return { ok: false, error: `Ollama returned ${response.status} for ${model}. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
+  }
+  let payload: unknown
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: `Ollama did not return JSON. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
+  }
+  const { content, thought } = textFrom(payload)
+  const review = readScore(content, model) ?? readScore(`${content}\n${thought}`, model)
+  if (!review) {
+    const preview = (content || thought || raw).replace(/\s+/g, " ").slice(0, 240)
+    return { ok: false, error: preview ? `Ollama answered, but not with a note. ${preview}` : "Ollama returned an empty reply" }
+  }
+  return { ok: true, review }
+}
+
+type NoteJob = {
+  at: number
+  status: "pending" | "done" | "error"
+  review?: LocalReview
+  error?: string
+  controller: AbortController
+}
+
+const jobs = new Map<string, NoteJob>()
+
+function sweepJobs() {
+  const cutoff = Date.now() - 20 * 60 * 1000
+  for (const [id, job] of jobs) {
+    if (job.at >= cutoff) continue
+    job.controller.abort()
+    jobs.delete(id)
+  }
+}
+
+function noteInput(data: {
+  endpoint?: string
+  model?: string
+  brief?: CompanyBrief
+}) {
+  return {
+    endpoint: String(data?.endpoint ?? DEFAULT_ENDPOINT).trim().slice(0, 200),
+    model: String(data?.model ?? DEFAULT_MODEL).trim().slice(0, 80),
+    brief: {
+      name: String(data?.brief?.name ?? "").slice(0, 140),
+      ticker: String(data?.brief?.ticker ?? "").slice(0, 12),
+      entity: String(data?.brief?.entity ?? "").slice(0, 400),
+      filings: (data?.brief?.filings ?? []).slice(0, 6).map((item) => ({
+        form: String(item.form ?? "").slice(0, 20),
+        date: String(item.date ?? "").slice(0, 20),
+        url: String(item.url ?? "").slice(0, 200),
+      })),
+      headlines: (data?.brief?.headlines ?? []).slice(0, 4).map((item) => ({
+        kind: item.kind === "ir" ? ("ir" as const) : ("news" as const),
+        title: String(item.title ?? "").slice(0, 240),
+        source: String(item.source ?? "").slice(0, 80),
+        published: String(item.published ?? "").slice(0, 40),
+      })),
+    },
+  }
+}
+
+export const startLocalModel = createServerFn({ method: "POST" })
+  .validator(noteInput)
+  .handler(({ data }) => {
+    sweepJobs()
+    const id = crypto.randomUUID()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12 * 60 * 1000)
+    const job: NoteJob = { at: Date.now(), status: "pending", controller }
+    jobs.set(id, job)
+    void writeNote(data, controller.signal)
+      .then((result) => {
+        clearTimeout(timer)
+        const current = jobs.get(id)
+        if (!current || current.status !== "pending") return
+        if (result.ok) {
+          current.status = "done"
+          current.review = result.review
+          return
+        }
+        current.status = "error"
+        current.error = result.error
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timer)
+        const current = jobs.get(id)
+        if (!current || current.status !== "pending") return
+        current.status = "error"
+        current.error = error instanceof Error ? error.message : "The model did not finish"
+      })
+    return { ok: true as const, jobId: id }
   })
+
+export const pollLocalModel = createServerFn({ method: "POST" })
+  .validator((data: { jobId?: string }) => ({
+    jobId: String(data?.jobId ?? "").slice(0, 80),
+  }))
+  .handler(({ data }) => {
+    const job = jobs.get(data.jobId)
+    if (!job) return { ok: false as const, error: "That note expired. Open the company again." }
+    if (job.status === "pending") return { ok: true as const, pending: true as const }
+    jobs.delete(data.jobId)
+    if (job.status === "error" || !job.review) {
+      return { ok: false as const, error: job.error || "The model did not finish" }
+    }
+    return { ok: true as const, pending: false as const, review: job.review }
+  })
+
+export const cancelLocalModel = createServerFn({ method: "POST" })
+  .validator((data: { jobId?: string }) => ({
+    jobId: String(data?.jobId ?? "").slice(0, 80),
+  }))
+  .handler(({ data }) => {
+    const job = jobs.get(data.jobId)
+    job?.controller.abort()
+    jobs.delete(data.jobId)
+    return { ok: true as const }
+  })
+

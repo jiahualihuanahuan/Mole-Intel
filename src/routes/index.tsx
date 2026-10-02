@@ -3,7 +3,7 @@ import { useServerFn } from "@tanstack/react-start"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { universe, type UniverseRow } from "@/data/universe"
 import { getCompanyBrief, getNewsBatch, type CompanyBrief, type Headline } from "@/lib/intel.functions"
-import { askLocalModel, DEFAULT_ENDPOINT, DEFAULT_MODEL, type LocalReview } from "@/lib/local-llm"
+import { cancelLocalModel, DEFAULT_ENDPOINT, DEFAULT_MODEL, pollLocalModel, startLocalModel, type LocalReview } from "@/lib/local-llm"
 
 export const Route = createFileRoute("/")({ component: Home })
 
@@ -12,7 +12,9 @@ type Filter = "all" | "ndx" | "spx"
 function Home() {
   const fetchNews = useServerFn(getNewsBatch)
   const fetchBrief = useServerFn(getCompanyBrief)
-  const fetchReview = useServerFn(askLocalModel)
+  const startReview = useServerFn(startLocalModel)
+  const pollReview = useServerFn(pollLocalModel)
+  const cancelReview = useServerFn(cancelLocalModel)
   const [filter, setFilter] = useState<Filter>("ndx")
   const [query, setQuery] = useState("")
   const [news, setNews] = useState<Record<string, Headline[]>>({})
@@ -134,34 +136,46 @@ function Home() {
   useEffect(() => {
     if (!settingsReady || !armed || !brief) return
     let cancelled = false
+    let timer = 0
+    const job = { id: "" }
     setReviewState("loading")
     setReviewError("")
-    fetchReview({ data: { endpoint, model: modelName, brief } })
-      .then((value) => {
+    const tick = async () => {
+      const started = await startReview({ data: { endpoint, model: modelName, brief } })
+      if (cancelled) {
+        void cancelReview({ data: { jobId: started.jobId } })
+        return
+      }
+      job.id = started.jobId
+      while (!cancelled) {
+        await new Promise((resolve) => {
+          timer = window.setTimeout(resolve, 2000)
+        })
+        if (cancelled) return
+        const value = await pollReview({ data: { jobId: job.id } })
         if (cancelled) return
         if (!value.ok) {
           setReviewState("error")
           setReviewError(value.error)
           return
         }
+        if (value.pending) continue
         setReview(value.review)
         setReviewState("idle")
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setReviewState("error")
-          const message = error instanceof Error ? error.message : "The local model did not answer"
-          setReviewError(
-            message === "Failed to fetch"
-              ? "The page lost the connection while qwen3.5 was still running."
-              : message,
-          )
-        }
-      })
+        return
+      }
+    }
+    tick().catch((error: unknown) => {
+      if (cancelled) return
+      setReviewState("error")
+      setReviewError(error instanceof Error ? error.message : "The local model did not answer")
+    })
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
+      if (job.id) void cancelReview({ data: { jobId: job.id } })
     }
-  }, [armed, brief, endpoint, fetchReview, modelName, settingsReady])
+  }, [armed, brief, cancelReview, endpoint, modelName, pollReview, settingsReady, startReview])
 
   function saveModel() {
     const next = endpoint.trim()
@@ -332,7 +346,7 @@ function Home() {
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Buy-side note</h3>
                     {reviewState === "loading" && (
-                      <p className="mt-2 text-sm text-muted">qwen3.5 is working the name…</p>
+                      <p className="mt-2 text-sm text-muted">qwen3.5 is working the name. This can take a few minutes.</p>
                     )}
                     {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
                     {review && (
