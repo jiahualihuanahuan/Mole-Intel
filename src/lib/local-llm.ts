@@ -11,6 +11,7 @@ export type LocalScore = {
 }
 
 export type LocalReview = {
+  digest: string
   summary: string
   scores: LocalScore[]
   model: string
@@ -62,10 +63,11 @@ function scoreFrom(body: string, model: string): LocalReview | null {
   for (let i = objects.length - 1; i >= 0; i--) {
     try {
       const parsed = JSON.parse(objects[i]) as {
+        digest?: unknown
         summary?: unknown
         scores?: { question?: unknown; score?: unknown; note?: unknown }[]
       }
-      if (!parsed || typeof parsed !== "object" || (!("summary" in parsed) && !("scores" in parsed))) continue
+      if (!parsed || typeof parsed !== "object" || (!("summary" in parsed) && !("scores" in parsed) && !("digest" in parsed))) continue
       const scores = Array.isArray(parsed.scores)
         ? parsed.scores.slice(0, 5).map((item, index) => ({
             question: String(item.question || QUESTIONS[index] || "Check"),
@@ -74,6 +76,7 @@ function scoreFrom(body: string, model: string): LocalReview | null {
           }))
         : []
       return {
+        digest: String(parsed.digest || "").slice(0, 1200),
         summary: String(parsed.summary || "").slice(0, 700),
         scores,
         model,
@@ -89,6 +92,7 @@ export function parseLocalReview(raw: string, model: string): LocalReview {
   const found = readScore(raw, model)
   return (
     found ?? {
+      digest: "",
       summary: stripThink(raw).slice(0, 700) || "The model returned no evaluation.",
       scores: [],
       model,
@@ -121,7 +125,7 @@ async function complete(root: string, model: string, packet: unknown) {
         {
           role: "system",
           content:
-            "You evaluate sources for a company research desk. Think through timeliness, expertise, bias, conflicts across sources, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. After thinking, end with JSON only: {\"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. Exactly these questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
+            "You evaluate sources for a company research desk. Think through the recent filings and headlines first, then timeliness, expertise, bias, conflicts, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. Do not invent numbers that are not in the packet. After thinking, end with JSON only: {\"digest\": string, \"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. digest is 3 to 5 sentences on what the recent filings and headlines say, naming the form and the date. summary is one sentence on whether those sources can be trusted. Exactly these score questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
         },
         { role: "user", content: JSON.stringify(packet) },
       ],

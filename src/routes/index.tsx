@@ -325,17 +325,18 @@ function Home() {
                     </ul>
                   </div>
                   <div>
-                    <h3 className="text-xs tracking-wide text-muted">Source test from your model</h3>
+                    <h3 className="text-xs tracking-wide text-muted">Summary</h3>
                     {reviewState === "loading" && (
-                      <p className="mt-2 text-sm text-muted">qwen3.5 is thinking through the sources…</p>
+                      <p className="mt-2 text-sm text-muted">qwen3.5 is reading the filings and wires…</p>
                     )}
                     {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
-                    {!armed && reviewState === "idle" && (
-                      <p className="mt-2 text-sm text-muted">Save the model address. The next company packet goes to it.</p>
-                    )}
+                    {review?.digest && <p className="mt-2 text-sm leading-relaxed">{review.digest}</p>}
+                  </div>
+                  <div>
+                    <h3 className="text-xs tracking-wide text-muted">Source test from your model</h3>
                     {review && (
                       <div className="mt-2 space-y-2">
-                        <p className="text-sm leading-relaxed">{review.summary}</p>
+                        {review.summary && <p className="text-sm leading-relaxed">{review.summary}</p>}
                         <ul className="space-y-2">
                           {review.scores.map((item) => (
                             <li key={item.question} className="text-sm">
