@@ -31,7 +31,7 @@ function Home() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsError, setSettingsError] = useState("")
-  const [selected, setSelected] = useState<UniverseRow | null>(universe[0] ?? null)
+  const [selected, setSelected] = useState<UniverseRow | null>(null)
   const [brief, setBrief] = useState<CompanyBrief | null>(null)
   const [briefState, setBriefState] = useState<"idle" | "loading" | "error">("idle")
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
@@ -259,6 +259,7 @@ function Home() {
       )}
       <div>
         <section className="px-4 py-6 sm:px-8">
+          {!selected && <p className="text-sm text-muted">Search for a company.</p>}
           {selected && (
             <div>
               <p className="text-xs tracking-wide text-muted">{selected.index}</p>

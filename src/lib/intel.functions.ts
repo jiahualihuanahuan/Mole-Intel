@@ -79,6 +79,10 @@ const NEWS_TTL = 15 * 60 * 1000
 let tickerMap: Map<string, string> | null = null
 let tickerLoaded = 0
 
+function looksEnglish(text: string) {
+  return !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0590-\u05ff]/u.test(text)
+}
+
 function decode(value: string) {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
@@ -111,7 +115,7 @@ function parseRss(xml: string, limit = 6): Headline[] {
     const published = decode(block.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] ?? "")
     const source = decode(block.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] ?? "")
     const sourceUrl = decode(block.match(/<source[^>]*url="([^"]+)"/)?.[1] ?? "")
-    if (!title) continue
+    if (!title || !looksEnglish(title)) continue
     items.push({
       title: title.replace(/\s+-\s+[^-]+$/, "").trim() || title,
       link,
@@ -132,7 +136,7 @@ async function rss(query: string, limit = 6): Promise<Headline[]> {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": UA, Accept: "application/rss+xml, application/xml" },
+      headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/rss+xml, application/xml" },
     })
     if (!response.ok) return []
     return parseRss(await response.text(), limit)
@@ -160,7 +164,7 @@ async function headlinesFor(ticker: string, name: string): Promise<Headline[]> {
 async function loadTickers() {
   if (tickerMap && Date.now() - tickerLoaded < 12 * 60 * 60 * 1000) return tickerMap
   const response = await fetch("https://www.sec.gov/files/company_tickers.json", {
-    headers: { "User-Agent": UA, Accept: "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
   })
   if (!response.ok) throw new Error("EDGAR ticker list unavailable")
   const payload = (await response.json()) as Record<string, { cik_str: number; ticker: string }>
@@ -242,7 +246,7 @@ async function olderFilings(cik: string, names: string[]) {
     names.map(async (name) => {
       try {
         const response = await fetch(`https://data.sec.gov/submissions/${name}`, {
-          headers: { "User-Agent": UA, Accept: "application/json" },
+          headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
           signal: AbortSignal.timeout(20000),
         })
         if (!response.ok) return [] as Filing[]
@@ -431,7 +435,8 @@ function pickWebsite(urls: string[]) {
         if (!path) score += 5
         if (path.split("/").filter(Boolean).length <= 1) score += 2
         if (/^\/[a-z]{2}$/i.test(path)) score -= 4
-        if (parsed.hostname.startsWith("www.")) score += 1
+        if (/\.(de|fr|jp|cn|kr|es|it|br|ru|nl|se|no|dk|pl|tw|hk)$/i.test(parsed.hostname)) score -= 6
+        if (parsed.hostname.endsWith(".com")) score += 2
         return { url: `${parsed.protocol}//${parsed.host}`, score }
       } catch {
         return { url, score: -10 }
@@ -459,14 +464,24 @@ function pageText(html: string) {
 async function readSitePage(url: string) {
   try {
     const response = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: "text/html" },
+      headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "text/html" },
       signal: AbortSignal.timeout(5000),
       redirect: "follow",
     })
     if (!response.ok) return null
     if (/sitemap/i.test(response.url)) return null
-    const text = pageText((await response.text()).slice(0, 180000))
-    if (!text) return null
+    const html = (await response.text()).slice(0, 180000)
+    const lang = html.match(/<html[^>]*\blang=["']?([a-zA-Z-]+)/i)?.[1] ?? ""
+    if (lang && !/^en(-|$)/i.test(lang)) return null
+    let path = ""
+    try {
+      path = new URL(response.url).pathname
+    } catch {
+      path = ""
+    }
+    if (/^\/[a-z]{2}(-[a-z]{2})?(\/|$)/i.test(path) && !/^\/en(-[a-z]{2})?(\/|$)/i.test(path)) return null
+    const text = pageText(html)
+    if (!text || !looksEnglish(text)) return null
     return { url: response.url || url, text }
   } catch {
     return null
@@ -490,7 +505,7 @@ function decodeHtml(value: string) {
 async function fetchHtml(url: string) {
   try {
     const response = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: "text/html" },
+      headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "text/html" },
       signal: AbortSignal.timeout(6000),
       redirect: "follow",
     })
@@ -508,7 +523,7 @@ function asJobs(
   const jobs: JobPosting[] = []
   for (const row of rows) {
     const title = String(row.title || "").replace(/\s+/g, " ").trim()
-    if (!title || !AI_ROLE.test(`${title} ${row.team || ""}`)) continue
+    if (!title || !looksEnglish(title) || !AI_ROLE.test(`${title} ${row.team || ""}`)) continue
     const key = title.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
@@ -528,7 +543,7 @@ async function workdayJobs(tenant: string, cluster: string, site: string) {
   const endpoint = `https://${tenant}.${cluster}.myworkdayjobs.com/wday/cxs/${tenant}/${site}/jobs`
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "User-Agent": UA, Accept: "application/json", "Content-Type": "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText: "machine learning" }),
     signal: AbortSignal.timeout(8000),
   })
@@ -548,7 +563,7 @@ async function workdayJobs(tenant: string, cluster: string, site: string) {
 
 async function amazonJobs() {
   const response = await fetch("https://www.amazon.jobs/en/search.json?base_query=machine%20learning&result_limit=20", {
-    headers: { "User-Agent": UA, Accept: "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) return []
@@ -568,7 +583,7 @@ async function amazonJobs() {
 
 async function greenhouseJobs(token: string) {
   const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${token}/jobs`, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) return []
@@ -582,7 +597,7 @@ async function greenhouseJobs(token: string) {
 
 async function leverJobs(site: string) {
   const response = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) return []
@@ -597,7 +612,7 @@ async function leverJobs(site: string) {
 
 async function ashbyJobs(board: string) {
   const response = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${board}`, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) return []
@@ -678,7 +693,7 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
   ]
   try {
     const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${query}&language=en&format=json&type=item&limit=1`
-    const search = (await (await fetch(searchUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) })).json()) as {
+    const search = (await (await fetch(searchUrl, { headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(8000) })).json()) as {
       search?: { id?: string; label?: string; description?: string }[]
     }
     const hit = search.search?.[0]
@@ -687,7 +702,7 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
     if (hit?.id && words.some((word) => label.includes(word))) {
       profile.summary = hit.description ?? ""
       const entityUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${hit.id}&props=claims|sitelinks&sitefilter=enwiki&format=json`
-      const entity = (await (await fetch(entityUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) })).json()) as {
+      const entity = (await (await fetch(entityUrl, { headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(8000) })).json()) as {
         entities?: Record<string, { claims?: Record<string, { mainsnak?: { datavalue?: { value?: unknown } } }[]>; sitelinks?: { enwiki?: { title?: string } } }>
       }
       const record = entity.entities?.[hit.id]
@@ -713,7 +728,7 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
         const wiki = (await (
           await fetch(
             `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&titles=${encodeURIComponent(wikiTitle)}&exintro=1&explaintext=1&format=json&redirects=1`,
-            { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) },
+            { headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(8000) },
           )
         ).json()) as { query?: { pages?: Record<string, { extract?: string }> } }
         const extract = Object.values(wiki.query?.pages ?? {})[0]?.extract ?? ""
@@ -766,10 +781,10 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     if (cik) {
       const [response, factsResponse] = await Promise.all([
         fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
-          headers: { "User-Agent": UA, Accept: "application/json" },
+          headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
         }),
         fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, {
-          headers: { "User-Agent": UA, Accept: "application/json" },
+          headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
         }),
       ])
       if (factsResponse.ok) {
