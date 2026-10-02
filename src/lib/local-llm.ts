@@ -25,54 +25,108 @@ function asScore(value: unknown): LocalScore["score"] {
   return "caution"
 }
 
-export function parseLocalReview(raw: string, model: string): LocalReview {
-  const withoutThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim()
-  const fenced = withoutThink.match(/```(?:json)?\s*([\s\S]*?)```/)
-  const body = (fenced?.[1] ?? withoutThink).trim()
-  const start = body.indexOf("{")
-  const end = body.lastIndexOf("}")
-  if (start < 0 || end <= start) {
-    return { summary: body.slice(0, 700) || "The model returned no evaluation.", scores: [], model }
-  }
-  const parsed = JSON.parse(body.slice(start, end + 1)) as {
-    summary?: unknown
-    scores?: { question?: unknown; score?: unknown; note?: unknown }[]
-  }
-  const scores = Array.isArray(parsed.scores)
-    ? parsed.scores.slice(0, 5).map((item, index) => ({
-        question: String(item.question || QUESTIONS[index] || "Check"),
-        score: asScore(item.score),
-        note: String(item.note || "").slice(0, 400),
-      }))
-    : []
-  return {
-    summary: String(parsed.summary || "").slice(0, 700),
-    scores,
-    model,
-  }
+function stripThink(raw: string) {
+  return raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, " ")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, " ")
+    .replace(/<think>[\s\S]*$/i, " ")
+    .trim()
 }
 
-async function complete(root: string, model: string, packet: unknown, think: boolean) {
-  const response = await fetch(`${root}/chat/completions`, {
+function scoreFrom(body: string, model: string): LocalReview | null {
+  const objects: string[] = []
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== "{") continue
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let j = i; j < body.length; j++) {
+      const char = body[j]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === "\\") escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') inString = true
+      else if (char === "{") depth += 1
+      else if (char === "}") {
+        depth -= 1
+        if (depth === 0) {
+          objects.push(body.slice(i, j + 1))
+          break
+        }
+      }
+    }
+  }
+  for (let i = objects.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(objects[i]) as {
+        summary?: unknown
+        scores?: { question?: unknown; score?: unknown; note?: unknown }[]
+      }
+      if (!parsed || typeof parsed !== "object" || (!("summary" in parsed) && !("scores" in parsed))) continue
+      const scores = Array.isArray(parsed.scores)
+        ? parsed.scores.slice(0, 5).map((item, index) => ({
+            question: String(item.question || QUESTIONS[index] || "Check"),
+            score: asScore(item.score),
+            note: String(item.note || "").slice(0, 400),
+          }))
+        : []
+      return {
+        summary: String(parsed.summary || "").slice(0, 700),
+        scores,
+        model,
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+export function parseLocalReview(raw: string, model: string): LocalReview {
+  const found = readScore(raw, model)
+  return (
+    found ?? {
+      summary: stripThink(raw).slice(0, 700) || "The model returned no evaluation.",
+      scores: [],
+      model,
+    }
+  )
+}
+
+function readScore(raw: string, model: string): LocalReview | null {
+  const withoutThink = stripThink(raw)
+  const fenced = withoutThink.match(/```(?:json)?\s*([\s\S]*?)```/)
+  const bodies = fenced?.[1] ? [fenced[1], withoutThink] : [withoutThink]
+  for (const source of bodies) {
+    const found = scoreFrom(source, model)
+    if (found) return found
+  }
+  return null
+}
+
+async function complete(root: string, model: string, packet: unknown) {
+  return fetch(`${root}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(180000),
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      max_tokens: 700,
-      ...(think ? {} : { think: false }),
+      max_tokens: 4096,
+      think: true,
       messages: [
         {
           role: "system",
           content:
-            "You evaluate sources for a company research desk. Judge timeliness, expertise, bias, conflicts across sources, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. Reply with JSON only: {\"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. Exactly these questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
+            "You evaluate sources for a company research desk. Think through timeliness, expertise, bias, conflicts across sources, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. After thinking, end with JSON only: {\"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. Exactly these questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
         },
         { role: "user", content: JSON.stringify(packet) },
       ],
     }),
   })
-  return response
 }
 
 export const askLocalModel = createServerFn({ method: "POST" })
@@ -124,8 +178,7 @@ export const askLocalModel = createServerFn({ method: "POST" })
     let response: Response | null = null
     for (const target of targets) {
       try {
-        response = await complete(target, model, packet, false)
-        if (response.status === 400) response = await complete(target, model, packet, true)
+        response = await complete(target, model, packet)
         break
       } catch {
         response = null
@@ -141,14 +194,12 @@ export const askLocalModel = createServerFn({ method: "POST" })
       return { ok: false as const, error: `Ollama returned ${response.status} for ${model}` }
     }
     const body = (await response.json()) as {
-      choices?: { message?: { content?: string; reasoning?: string } }[]
+      choices?: { message?: { content?: string; reasoning?: string; thinking?: string } }[]
     }
     const message = body.choices?.[0]?.message
-    const text = message?.content || message?.reasoning || ""
-    if (!text) return { ok: false as const, error: "Ollama returned an empty reply" }
-    try {
-      return { ok: true as const, review: parseLocalReview(text, model) }
-    } catch {
-      return { ok: false as const, error: "Ollama did not return a source score" }
-    }
+    const content = message?.content ?? ""
+    const thought = message?.reasoning || message?.thinking || ""
+    const review = readScore(content, model) ?? readScore(`${content}\n${thought}`, model)
+    if (!review) return { ok: false as const, error: "Ollama did not return a source score" }
+    return { ok: true as const, review }
   })

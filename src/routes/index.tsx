@@ -326,7 +326,9 @@ function Home() {
                   </div>
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Source test from your model</h3>
-                    {reviewState === "loading" && <p className="mt-2 text-sm text-muted">Asking your local model…</p>}
+                    {reviewState === "loading" && (
+                      <p className="mt-2 text-sm text-muted">qwen3.5 is thinking through the sources…</p>
+                    )}
                     {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
                     {!armed && reviewState === "idle" && (
                       <p className="mt-2 text-sm text-muted">Save the model address. The next company packet goes to it.</p>
