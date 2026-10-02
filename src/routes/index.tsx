@@ -244,9 +244,51 @@ function Home() {
                   <p className="text-sm leading-relaxed">{brief.entity}</p>
                   <p className="text-sm text-muted">
                     {brief.exchanges.join(", ") || "Exchange not on the SEC profile"}
+                    {brief.profile.sic ? ` · ${brief.profile.sic}` : ""}
                     {brief.address ? ` · ${brief.address}` : ""}
                     {brief.cik ? ` · CIK ${brief.cik}` : ""}
+                    {brief.profile.founded ? ` · founded ${brief.profile.founded}` : ""}
+                    {brief.profile.employees ? ` · about ${brief.profile.employees} employees` : ""}
                   </p>
+                  {(brief.profile.summary || brief.profile.website || brief.profile.pages.length > 0) && (
+                    <div>
+                      <h2 className="text-xs tracking-wide text-muted">What the company says</h2>
+                      {brief.profile.website && (
+                        <a href={brief.profile.website} target="_blank" rel="noreferrer" className="mt-1 block text-sm text-pine underline">
+                          {brief.profile.website}
+                        </a>
+                      )}
+                      {brief.profile.summary && <p className="mt-2 text-sm leading-relaxed">{brief.profile.summary}</p>}
+                      {brief.profile.pages.map((page) => (
+                        <p key={page.url} className="mt-2 text-sm leading-relaxed">
+                          <a href={page.url} target="_blank" rel="noreferrer" className="font-medium text-pine underline">
+                            {page.label}
+                          </a>
+                          <span className="text-muted"> {page.text}</span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {brief.profile.peers.length > 0 && (
+                    <p className="text-sm text-muted">Same sector in the universe: {brief.profile.peers.join(", ")}</p>
+                  )}
+                  {brief.profile.links.length > 0 && (
+                    <div>
+                      <h2 className="text-xs tracking-wide text-muted">Channels not read here</h2>
+                      <p className="mt-1 text-xs text-muted">
+                        Social, reviews, and private-company databases stay behind their own login. These open the public page.
+                      </p>
+                      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                        {brief.profile.links.map((link) => (
+                          <li key={link.label}>
+                            <a href={link.url} target="_blank" rel="noreferrer" className="text-sm text-pine underline">
+                              {link.label}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <div>
                     <h2 className="text-xs tracking-wide text-muted">Buy-side note</h2>
                     {reviewState === "loading" && review && (

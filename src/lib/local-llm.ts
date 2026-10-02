@@ -327,6 +327,15 @@ function spawnNote(
       filings: { form: string; date: string; reportDate?: string; items?: string }[]
       facts?: { label: string; unit: string; points: string[] }[]
       headlines: { kind: string; title: string; source: string; published: string }[]
+      profile?: {
+        sic?: string
+        website?: string
+        summary?: string
+        founded?: string
+        employees?: string
+        pages?: { label: string; text: string }[]
+        peers?: string[]
+      }
     }
   },
 ) {
@@ -344,6 +353,15 @@ function spawnNote(
     })),
     figures: data.brief.facts ?? [],
     headlines: data.brief.headlines,
+    profile: {
+      sic: data.brief.profile?.sic || "",
+      website: data.brief.profile?.website || "",
+      founded: data.brief.profile?.founded || "",
+      employees: data.brief.profile?.employees || "",
+      summary: data.brief.profile?.summary || "",
+      pages: data.brief.profile?.pages ?? [],
+      peers: data.brief.profile?.peers ?? [],
+    },
     units:
       "Dollar figures in the figures list are USD millions, except diluted EPS which is USD per share. Cite the period and the form. Do not rescale.",
   }
@@ -402,6 +420,18 @@ function noteInput(data: {
         source: String(item.source ?? "").slice(0, 80),
         published: String(item.published ?? "").slice(0, 40),
       })),
+      profile: {
+        sic: String(data?.brief?.profile?.sic ?? "").slice(0, 120),
+        website: String(data?.brief?.profile?.website ?? "").slice(0, 200),
+        summary: String(data?.brief?.profile?.summary ?? "").slice(0, 700),
+        founded: String(data?.brief?.profile?.founded ?? "").slice(0, 10),
+        employees: String(data?.brief?.profile?.employees ?? "").slice(0, 20),
+        pages: (data?.brief?.profile?.pages ?? []).slice(0, 3).map((page) => ({
+          label: String(page.label ?? "").slice(0, 40),
+          text: String(page.text ?? "").slice(0, 400),
+        })),
+        peers: (data?.brief?.profile?.peers ?? []).slice(0, 8).map((peer) => String(peer).slice(0, 80)),
+      },
     },
   }
 }

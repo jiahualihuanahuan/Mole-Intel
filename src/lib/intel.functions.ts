@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
+import { universe } from "@/data/universe"
 import {
   archiveCounts,
   filingBackfillDone,
@@ -36,6 +37,20 @@ export type FactLine = {
   points: string[]
 }
 
+export type CompanyPage = { label: string; url: string; text: string }
+export type CompanyLink = { label: string; url: string }
+
+export type CompanyProfile = {
+  sic: string
+  website: string
+  summary: string
+  founded: string
+  employees: string
+  pages: CompanyPage[]
+  peers: string[]
+  links: CompanyLink[]
+}
+
 export type CompanyBrief = {
   ticker: string
   name: string
@@ -46,6 +61,7 @@ export type CompanyBrief = {
   filings: Filing[]
   facts: FactLine[]
   headlines: Headline[]
+  profile: CompanyProfile
   archive: { filings: number; headlines: number }
   priorNote: StoredNote | null
   rubric: { question: string; note: string }[]
@@ -369,6 +385,173 @@ export const getNewsBatch = createServerFn({ method: "POST" })
     return { results }
   })
 
+const emptyProfile = (): CompanyProfile => ({
+  sic: "",
+  website: "",
+  summary: "",
+  founded: "",
+  employees: "",
+  pages: [],
+  peers: [],
+  links: [],
+})
+
+const profileCache = new Map<string, { at: number; profile: CompanyProfile }>()
+
+function claimValues(claims: Record<string, { mainsnak?: { datavalue?: { value?: unknown } } }[]> | undefined, pid: string) {
+  return (claims?.[pid] ?? [])
+    .map((claim) => {
+      const value = claim.mainsnak?.datavalue?.value
+      if (typeof value === "string") return value
+      if (value && typeof value === "object" && "time" in value) return String((value as { time: string }).time).slice(1, 5)
+      if (value && typeof value === "object" && "amount" in value) {
+        return String((value as { amount: string }).amount).replace(/^\+/, "").split(".")[0]
+      }
+      return ""
+    })
+    .filter(Boolean)
+}
+
+function pickWebsite(urls: string[]) {
+  const ranked = urls
+    .filter((url) => /^https?:\/\//i.test(url))
+    .map((url) => {
+      try {
+        const parsed = new URL(url)
+        const path = parsed.pathname.replace(/\/$/, "")
+        let score = 0
+        if (!path) score += 5
+        if (path.split("/").filter(Boolean).length <= 1) score += 2
+        if (/^\/[a-z]{2}$/i.test(path)) score -= 4
+        if (parsed.hostname.startsWith("www.")) score += 1
+        return { url: `${parsed.protocol}//${parsed.host}`, score }
+      } catch {
+        return { url, score: -10 }
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+  return ranked[0]?.url ?? ""
+}
+
+function pageText(html: string) {
+  const description =
+    html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)?.[1] ??
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i)?.[1] ??
+    ""
+  const body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  const text = decode(`${description} ${body}`).slice(0, 500)
+  return text.length >= 80 ? text : ""
+}
+
+async function readSitePage(url: string) {
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "text/html" },
+      signal: AbortSignal.timeout(5000),
+      redirect: "follow",
+    })
+    if (!response.ok) return null
+    if (/sitemap/i.test(response.url)) return null
+    const text = pageText((await response.text()).slice(0, 180000))
+    if (!text) return null
+    return { url: response.url || url, text }
+  } catch {
+    return null
+  }
+}
+
+async function firstPage(origin: string, label: string, paths: string[]) {
+  for (const path of paths) {
+    const found = await readSitePage(`${origin}${path}`)
+    if (found) return { label, url: found.url, text: found.text }
+  }
+  return null
+}
+
+async function loadProfile(ticker: string, name: string, sector: string): Promise<CompanyProfile> {
+  const cached = profileCache.get(ticker)
+  if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) return cached.profile
+  const profile = emptyProfile()
+  profile.peers = universe
+    .filter((row) => row.sector === sector && row.ticker !== ticker)
+    .slice(0, 8)
+    .map((row) => `${row.ticker} ${row.name}`)
+  const query = encodeURIComponent(name)
+  const links: CompanyLink[] = [
+    { label: "Glassdoor", url: `https://www.glassdoor.com/Search/results.htm?keyword=${query}` },
+    { label: "Indeed", url: `https://www.indeed.com/cmp?q=${query}` },
+    { label: "Crunchbase", url: `https://www.crunchbase.com/textsearch?q=${query}` },
+    { label: "Buzzfile", url: `https://www.buzzfile.com/Search/Company/Results?searchTerm=${query}` },
+  ]
+  try {
+    const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${query}&language=en&format=json&type=item&limit=1`
+    const search = (await (await fetch(searchUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) })).json()) as {
+      search?: { id?: string; label?: string; description?: string }[]
+    }
+    const hit = search.search?.[0]
+    const words = name.toLowerCase().split(/\W+/).filter((word) => word.length > 3)
+    const label = (hit?.label ?? "").toLowerCase()
+    if (hit?.id && words.some((word) => label.includes(word))) {
+      profile.summary = hit.description ?? ""
+      const entityUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${hit.id}&props=claims|sitelinks&sitefilter=enwiki&format=json`
+      const entity = (await (await fetch(entityUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) })).json()) as {
+        entities?: Record<string, { claims?: Record<string, { mainsnak?: { datavalue?: { value?: unknown } } }[]>; sitelinks?: { enwiki?: { title?: string } } }>
+      }
+      const record = entity.entities?.[hit.id]
+      const claims = record?.claims
+      profile.website = pickWebsite(claimValues(claims, "P856"))
+      profile.founded = claimValues(claims, "P571")[0] ?? ""
+      profile.employees = claimValues(claims, "P1128")[0] ?? ""
+      const twitter = claimValues(claims, "P2002")[0]
+      const linkedin = claimValues(claims, "P4264")[0]
+      const instagram = claimValues(claims, "P2003")[0]
+      const tiktok = claimValues(claims, "P7085")[0]
+      if (twitter) links.unshift({ label: "X", url: `https://x.com/${twitter}` })
+      else links.push({ label: "X", url: `https://x.com/search?q=${query}&f=live` })
+      if (linkedin) links.unshift({ label: "LinkedIn", url: `https://www.linkedin.com/company/${linkedin}` })
+      else links.push({ label: "LinkedIn", url: `https://www.linkedin.com/search/results/companies/?keywords=${query}` })
+      if (instagram) links.unshift({ label: "Instagram", url: `https://www.instagram.com/${instagram}` })
+      else links.push({ label: "Instagram", url: `https://www.instagram.com/explore/search/keyword/?q=${query}` })
+      if (tiktok) links.unshift({ label: "TikTok", url: `https://www.tiktok.com/@${tiktok}` })
+      else links.push({ label: "TikTok", url: `https://www.tiktok.com/search?q=${query}` })
+      const wikiTitle = record?.sitelinks?.enwiki?.title
+      if (wikiTitle) {
+        links.unshift({ label: "Wikipedia", url: `https://en.wikipedia.org/wiki/${encodeURIComponent(wikiTitle.replace(/ /g, "_"))}` })
+        const wiki = (await (
+          await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&titles=${encodeURIComponent(wikiTitle)}&exintro=1&explaintext=1&format=json&redirects=1`,
+            { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) },
+          )
+        ).json()) as { query?: { pages?: Record<string, { extract?: string }> } }
+        const extract = Object.values(wiki.query?.pages ?? {})[0]?.extract ?? ""
+        if (extract) profile.summary = extract.replace(/\s+/g, " ").trim().slice(0, 700)
+      }
+    }
+  } catch {
+    // Public reference data is optional. Filings still stand.
+  }
+  if (!links.some((item) => item.label === "X")) links.push({ label: "X", url: `https://x.com/search?q=${query}&f=live` })
+  if (!links.some((item) => item.label === "LinkedIn")) {
+    links.push({ label: "LinkedIn", url: `https://www.linkedin.com/search/results/companies/?keywords=${query}` })
+  }
+  if (profile.website) {
+    const pages = await Promise.all([
+      firstPage(profile.website, "About", ["/about", "/about-us", "/company"]),
+      firstPage(profile.website, "Newsroom", ["/newsroom", "/news", "/press", "/blog"]),
+      firstPage(profile.website, "Careers", ["/careers", "/jobs"]),
+    ])
+    profile.pages = pages.filter((page): page is CompanyPage => Boolean(page))
+  }
+  profile.links = links
+  profileCache.set(ticker, { at: Date.now(), profile })
+  return profile
+}
+
 export const getCompanyBrief = createServerFn({ method: "POST" })
   .validator((data: { ticker: string; name: string }) => ({
     ticker: String(data?.ticker ?? "")
@@ -385,6 +568,7 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     let address = ""
     let entity = "Not an SEC registrant under this ticker"
     let canadian = false
+    let sic = ""
     let latestAnnual: string | null = null
 
     if (cik) {
@@ -405,11 +589,14 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       }
       if (response.ok) {
         const sub = (await response.json()) as {
+          sic?: string
+          sicDescription?: string
           exchanges?: string[]
           addresses?: { business?: Record<string, string> }
           filings?: { recent?: FilingColumns; files?: { name: string }[] }
         }
         exchanges = sub.exchanges ?? []
+        sic = [sub.sic, sub.sicDescription].filter(Boolean).join(" ")
         address = addressOf(sub.addresses?.business)
         canadian = /canada/i.test(address)
         const recentRows = filingsFromColumns(cik, sub.filings?.recent ?? {})
@@ -426,8 +613,15 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       }
     }
 
-    const freshNews = await newsHistory(data.name, !newsBackfillDone(data.ticker)).catch(() => [] as Headline[])
-    if (freshNews.length > 0) saveHeadlines(data.ticker, freshNews)
+    const sector = universe.find((row) => row.ticker === data.ticker)?.sector ?? ""
+    const [freshNews, tradeNews, profile] = await Promise.all([
+      newsHistory(data.name, !newsBackfillDone(data.ticker)).catch(() => [] as Headline[]),
+      rss(`"${data.name}" ${sector} (industry OR contract OR competitor)`, 12).catch(() => [] as Headline[]),
+      loadProfile(data.ticker, data.name, sector).catch(() => emptyProfile()),
+    ])
+    profile.sic = sic
+    const incoming = [...freshNews, ...tradeNews]
+    if (incoming.length > 0) saveHeadlines(data.ticker, incoming)
     if (!newsBackfillDone(data.ticker) && freshNews.length > 0) markNewsBackfill(data.ticker)
     const headlines = recentHeadlines(data.ticker, 6)
     const filings = recentFilings(data.ticker, 8)
@@ -473,6 +667,7 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       filings,
       facts,
       headlines,
+      profile,
       archive,
       priorNote,
       rubric,
