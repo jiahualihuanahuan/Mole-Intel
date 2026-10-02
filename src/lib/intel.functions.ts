@@ -12,7 +12,15 @@ export type Headline = {
 export type Filing = {
   form: string
   date: string
+  reportDate: string
+  items: string
   url: string
+}
+
+export type FactLine = {
+  label: string
+  unit: string
+  points: string[]
 }
 
 export type CompanyBrief = {
@@ -23,6 +31,7 @@ export type CompanyBrief = {
   address: string
   entity: string
   filings: Filing[]
+  facts: FactLine[]
   headlines: Headline[]
   rubric: { question: string; note: string }[]
 }
@@ -75,7 +84,7 @@ function parseRss(xml: string): Headline[] {
       sourceUrl,
       kind: classify(title, source, sourceUrl),
     })
-    if (items.length >= 4) break
+    if (items.length >= 6) break
   }
   return items
 }
@@ -135,6 +144,120 @@ function addressOf(block: Record<string, string> | undefined) {
     .join(", ")
 }
 
+const EIGHT_K: Record<string, string> = {
+  "1.01": "material agreement",
+  "1.02": "agreement ended",
+  "1.05": "cybersecurity incident",
+  "2.01": "acquisition or sale",
+  "2.02": "results",
+  "2.03": "new debt",
+  "2.04": "default or acceleration",
+  "2.05": "exit costs",
+  "2.06": "impairment",
+  "3.01": "delisting notice",
+  "4.02": "non-reliance on financials",
+  "5.02": "officer or director change",
+  "5.03": "charter or bylaw change",
+  "5.07": "shareholder vote",
+  "7.01": "Reg FD",
+  "8.01": "other event",
+}
+
+function itemLabel(raw: string) {
+  const labels = raw
+    .split(",")
+    .map((code) => code.trim())
+    .filter((code) => code && code !== "9.01")
+    .map((code) => EIGHT_K[code] || code)
+  return labels.slice(0, 4).join(", ")
+}
+
+type XbrlPoint = { end?: string; val?: number; form?: string; filed?: string; fp?: string; frame?: string; fy?: number }
+
+const METRICS: { label: string; concepts: string[]; scale: "m" | "ps" }[] = [
+  {
+    label: "Revenue",
+    concepts: [
+      "RevenueFromContractWithCustomerExcludingAssessedTax",
+      "RevenueFromContractWithCustomerIncludingAssessedTax",
+      "Revenues",
+      "SalesRevenueNet",
+    ],
+    scale: "m",
+  },
+  { label: "Operating income", concepts: ["OperatingIncomeLoss"], scale: "m" },
+  { label: "Net income", concepts: ["NetIncomeLoss"], scale: "m" },
+  { label: "Diluted EPS", concepts: ["EarningsPerShareDiluted"], scale: "ps" },
+  { label: "Operating cash flow", concepts: ["NetCashProvidedByUsedInOperatingActivities"], scale: "m" },
+  {
+    label: "Capex",
+    concepts: ["PaymentsToAcquireProductiveAssets", "PaymentsToAcquirePropertyPlantAndEquipment"],
+    scale: "m",
+  },
+]
+
+function framed(units: XbrlPoint[], annual: boolean) {
+  const frameRe = annual ? /^CY\d{4}$/ : /^CY\d{4}Q[1-4]$/
+  const forms = annual ? /10-K|20-F|40-F|DEF 14A/ : /10-Q|6-K/
+  const chosen = new Map<string, XbrlPoint>()
+  const rank = (form?: string) => (form === "10-K" || form === "20-F" || form === "40-F" ? 2 : 1)
+  for (const point of units) {
+    if (!point.frame || !frameRe.test(point.frame) || !forms.test(point.form || "")) continue
+    const prev = chosen.get(point.frame)
+    if (
+      !prev ||
+      rank(point.form) > rank(prev.form) ||
+      (rank(point.form) === rank(prev.form) && (point.filed || "") > (prev.filed || ""))
+    ) {
+      chosen.set(point.frame, point)
+    }
+  }
+  return [...chosen.values()].sort((a, b) => (b.end || "").localeCompare(a.end || "")).slice(0, 3)
+}
+
+function periodLabel(point: XbrlPoint) {
+  const quarter = point.frame?.match(/^CY(\d{4})Q([1-4])$/)
+  if (quarter) return `${quarter[1]} Q${quarter[2]}`
+  return `FY${point.fy || point.frame?.slice(2) || ""}`
+}
+
+function formatPoint(point: XbrlPoint, scale: "m" | "ps") {
+  const value = point.val ?? 0
+  const shown = scale === "ps" ? value.toFixed(2) : Math.round(value / 1e6).toLocaleString("en-US")
+  const source = point.form === "DEF 14A" ? "annual" : point.form
+  return `${periodLabel(point)} ${shown} (${source} filed ${point.filed})`
+}
+
+type CompanyFacts = {
+  facts?: { "us-gaap"?: Record<string, { units?: Record<string, XbrlPoint[]> }> }
+}
+
+function factLines(payload: CompanyFacts): FactLine[] {
+  const gaap = payload.facts?.["us-gaap"] ?? {}
+  const lines: FactLine[] = []
+  for (const metric of METRICS) {
+    let bestUnits: XbrlPoint[] | null = null
+    let bestEnd = ""
+    let unit = metric.scale === "ps" ? "USD per share" : "USD millions"
+    for (const concept of metric.concepts) {
+      const units = gaap[concept]?.units
+      if (!units) continue
+      const key = metric.scale === "ps" ? "USD/shares" : "USD"
+      const series = units[key] ?? units[Object.keys(units)[0]] ?? []
+      const latest = framed(series, true)[0] || framed(series, false)[0]
+      if (latest?.end && latest.end > bestEnd) {
+        bestUnits = series
+        bestEnd = latest.end
+        if (metric.scale === "ps") unit = "USD per share"
+      }
+    }
+    if (!bestUnits) continue
+    const points = [...framed(bestUnits, true), ...framed(bestUnits, false)].map((point) => formatPoint(point, metric.scale))
+    if (points.length) lines.push({ label: metric.label, unit, points })
+  }
+  return lines
+}
+
 export const getNewsBatch = createServerFn({ method: "POST" })
   .validator((data: { items: { ticker: string; name: string }[] }) => {
     const items = Array.isArray(data?.items) ? data.items.slice(0, 6) : []
@@ -180,6 +303,7 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     const map = await loadTickers().catch(() => new Map<string, string>())
     const cik = map.get(data.ticker) ?? null
     let filings: Filing[] = []
+    let facts: FactLine[] = []
     let exchanges: string[] = []
     let address = ""
     let entity = "Not an SEC registrant under this ticker"
@@ -187,9 +311,21 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     let latestAnnual: string | null = null
 
     if (cik) {
-      const response = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
-        headers: { "User-Agent": UA, Accept: "application/json" },
-      })
+      const [response, factsResponse] = await Promise.all([
+        fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, {
+          headers: { "User-Agent": UA, Accept: "application/json" },
+        }),
+        fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, {
+          headers: { "User-Agent": UA, Accept: "application/json" },
+        }),
+      ])
+      if (factsResponse.ok) {
+        try {
+          facts = factLines(await factsResponse.json())
+        } catch {
+          facts = []
+        }
+      }
       if (response.ok) {
         const sub = (await response.json()) as {
           name?: string
@@ -202,6 +338,8 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
               filingDate?: string[]
               accessionNumber?: string[]
               primaryDocument?: string[]
+              reportDate?: string[]
+              items?: string[]
             }
           }
         }
@@ -213,6 +351,8 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
         const dates = recent?.filingDate ?? []
         const accessions = recent?.accessionNumber ?? []
         const docs = recent?.primaryDocument ?? []
+        const reports = recent?.reportDate ?? []
+        const itemCodes = recent?.items ?? []
         const wanted = new Set(["10-K", "10-Q", "8-K", "20-F", "40-F", "6-K"])
         for (let i = 0; i < forms.length && filings.length < 8; i++) {
           if (!wanted.has(forms[i])) continue
@@ -220,6 +360,8 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
           filings.push({
             form: forms[i],
             date: dates[i] ?? "",
+            reportDate: reports[i] ?? "",
+            items: forms[i] === "8-K" ? itemLabel(itemCodes[i] ?? "") : "",
             url: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${acc}/${docs[i] ?? ""}`,
           })
           if (!latestAnnual && (forms[i] === "10-K" || forms[i] === "20-F" || forms[i] === "40-F")) {
@@ -268,6 +410,7 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       address,
       entity,
       filings,
+      facts,
       headlines,
       rubric,
     }

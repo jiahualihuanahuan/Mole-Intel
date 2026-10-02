@@ -317,7 +317,8 @@ function spawnNote(
       name: string
       ticker: string
       entity: string
-      filings: { form: string; date: string }[]
+      filings: { form: string; date: string; reportDate?: string; items?: string }[]
+      facts?: { label: string; unit: string; points: string[] }[]
       headlines: { kind: string; title: string; source: string; published: string }[]
     }
   },
@@ -328,8 +329,16 @@ function spawnNote(
     company: data.brief.name,
     ticker: data.brief.ticker,
     entity: data.brief.entity,
-    filings: data.brief.filings.map((item) => `${item.form} ${item.date}`),
+    filings: data.brief.filings.map((item) => ({
+      form: item.form,
+      filed: item.date,
+      period: item.reportDate || "",
+      event: item.items || "",
+    })),
+    figures: data.brief.facts ?? [],
     headlines: data.brief.headlines,
+    units:
+      "Dollar figures in the figures list are USD millions, except diluted EPS which is USD per share. Cite the period and the form. Do not rescale.",
   }
   let child: ChildProcess
   try {
@@ -368,12 +377,19 @@ function noteInput(data: {
       name: String(data?.brief?.name ?? "").slice(0, 140),
       ticker: String(data?.brief?.ticker ?? "").slice(0, 12),
       entity: String(data?.brief?.entity ?? "").slice(0, 400),
-      filings: (data?.brief?.filings ?? []).slice(0, 6).map((item) => ({
+      filings: (data?.brief?.filings ?? []).slice(0, 8).map((item) => ({
         form: String(item.form ?? "").slice(0, 20),
         date: String(item.date ?? "").slice(0, 20),
+        reportDate: String(item.reportDate ?? "").slice(0, 20),
+        items: String(item.items ?? "").slice(0, 120),
         url: String(item.url ?? "").slice(0, 200),
       })),
-      headlines: (data?.brief?.headlines ?? []).slice(0, 4).map((item) => ({
+      facts: (data?.brief?.facts ?? []).slice(0, 6).map((item) => ({
+        label: String(item.label ?? "").slice(0, 40),
+        unit: String(item.unit ?? "").slice(0, 40),
+        points: (item.points ?? []).slice(0, 6).map((point) => String(point).slice(0, 80)),
+      })),
+      headlines: (data?.brief?.headlines ?? []).slice(0, 6).map((item) => ({
         kind: item.kind === "ir" ? ("ir" as const) : ("news" as const),
         title: String(item.title ?? "").slice(0, 240),
         source: String(item.source ?? "").slice(0, 80),

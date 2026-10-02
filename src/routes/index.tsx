@@ -389,6 +389,22 @@ function Home() {
                       </div>
                     )}
                   </div>
+                  {brief.facts.length > 0 && (
+                    <div>
+                      <h3 className="text-xs tracking-wide text-muted">Figures from EDGAR</h3>
+                      <ul className="mt-2 space-y-2">
+                        {brief.facts.map((fact) => (
+                          <li key={fact.label} className="text-sm">
+                            <span className="font-medium">
+                              {fact.label}
+                              <span className="font-normal text-muted"> · {fact.unit}</span>
+                            </span>
+                            <span className="mt-1 block text-muted">{fact.points.join(" · ")}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Recent filings</h3>
                     <ul className="mt-2 space-y-1 text-sm">
@@ -397,7 +413,11 @@ function Home() {
                           <a href={filing.url} target="_blank" rel="noreferrer" className="text-pine underline">
                             {filing.form}
                           </a>
-                          <span className="text-muted"> · {filing.date}</span>
+                          <span className="text-muted">
+                            {" "}
+                            · {filing.date}
+                            {filing.items ? ` · ${filing.items}` : ""}
+                          </span>
                         </li>
                       ))}
                       {brief.filings.length === 0 && <li className="text-muted">No recent 10-K, 10-Q, or 8-K.</li>}
