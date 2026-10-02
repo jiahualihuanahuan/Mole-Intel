@@ -1,5 +1,8 @@
 import type { CompanyBrief } from "@/lib/intel.functions"
 
+export const DEFAULT_ENDPOINT = "http://192.168.86.35:11434/v1"
+export const DEFAULT_MODEL = "qwen3.5:9b"
+
 export type LocalScore = {
   question: string
   score: "pass" | "caution" | "fail"
@@ -22,8 +25,9 @@ function asScore(value: unknown): LocalScore["score"] {
 }
 
 export function parseLocalReview(raw: string, model: string): LocalReview {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
-  const body = (fenced?.[1] ?? raw).trim()
+  const withoutThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim()
+  const fenced = withoutThink.match(/```(?:json)?\s*([\s\S]*?)```/)
+  const body = (fenced?.[1] ?? withoutThink).trim()
   const start = body.indexOf("{")
   const end = body.lastIndexOf("}")
   if (start < 0 || end <= start) {
@@ -77,23 +81,33 @@ export async function askLocalModel(
       published: item.published,
     })),
   }
-  const response = await fetch(`${root}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: chosen,
-      temperature: 0.2,
-      max_tokens: 450,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You evaluate sources for a company research desk. Judge timeliness, expertise, bias, conflicts across sources, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. Reply with JSON only: {\"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. Exactly these questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
-        },
-        { role: "user", content: JSON.stringify(packet) },
-      ],
-    }),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${root}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: chosen,
+        temperature: 0.2,
+        max_tokens: 700,
+        think: false,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You evaluate sources for a company research desk. Judge timeliness, expertise, bias, conflicts across sources, and whether references or methodology can be found. A headline is not a figure. If news and a filing disagree, the filing wins. Reply with JSON only: {\"summary\": string, \"scores\": [{\"question\": string, \"score\": \"pass\"|\"caution\"|\"fail\", \"note\": string}]}. Exactly these questions, in order: Timeliness, Expertise, Bias, Conflicts, References and methodology.",
+          },
+          { role: "user", content: JSON.stringify(packet) },
+        ],
+      }),
+    })
+  } catch {
+    throw new Error(
+      "The browser could not reach " +
+        root +
+        ". If this is Ollama, set OLLAMA_ORIGINS=* on that machine and restart it.",
+    )
+  }
   if (!response.ok) {
     throw new Error(`Local model returned ${response.status}`)
   }

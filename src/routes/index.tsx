@@ -3,7 +3,7 @@ import { useServerFn } from "@tanstack/react-start"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { universe, type UniverseRow } from "@/data/universe"
 import { getCompanyBrief, getNewsBatch, type CompanyBrief, type Headline } from "@/lib/intel.functions"
-import { askLocalModel, type LocalReview } from "@/lib/local-llm"
+import { askLocalModel, DEFAULT_ENDPOINT, DEFAULT_MODEL, type LocalReview } from "@/lib/local-llm"
 
 export const Route = createFileRoute("/")({ component: Home })
 
@@ -19,8 +19,8 @@ function Home() {
   const [selected, setSelected] = useState<UniverseRow | null>(universe[0] ?? null)
   const [brief, setBrief] = useState<CompanyBrief | null>(null)
   const [briefState, setBriefState] = useState<"idle" | "loading" | "error">("idle")
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:8080/v1")
-  const [modelName, setModelName] = useState("")
+  const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
+  const [modelName, setModelName] = useState(DEFAULT_MODEL)
   const [settingsReady, setSettingsReady] = useState(false)
   const [armed, setArmed] = useState(false)
   const [review, setReview] = useState<LocalReview | null>(null)
@@ -46,16 +46,25 @@ function Home() {
 
   useEffect(() => {
     const saved = localStorage.getItem("mole-intel-llm")
+    let nextEndpoint = DEFAULT_ENDPOINT
+    let nextModel = DEFAULT_MODEL
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as { endpoint?: string; model?: string }
-        if (parsed.endpoint) setEndpoint(parsed.endpoint)
-        if (typeof parsed.model === "string") setModelName(parsed.model)
-        setArmed(true)
+        const stale =
+          !parsed.endpoint ||
+          parsed.endpoint === "http://127.0.0.1:8080/v1" ||
+          parsed.endpoint === "http://127.0.0.1:11434/v1"
+        if (!stale && parsed.endpoint) nextEndpoint = parsed.endpoint
+        if (parsed.model && parsed.model !== "local") nextModel = parsed.model
       } catch {
         localStorage.removeItem("mole-intel-llm")
       }
     }
+    setEndpoint(nextEndpoint)
+    setModelName(nextModel)
+    localStorage.setItem("mole-intel-llm", JSON.stringify({ endpoint: nextEndpoint, model: nextModel }))
+    setArmed(true)
     setSettingsReady(true)
   }, [])
 
@@ -247,7 +256,7 @@ function Home() {
           <div className="rounded-2xl border border-line bg-surface p-4">
             <h2 className="text-xs tracking-wide text-muted">Local model</h2>
             <p className="mt-1 text-sm text-muted">
-              OpenAI-compatible address on your machine. llama.cpp is usually port 8080. Ollama is usually 11434.
+              Ollama at 192.168.86.35, model qwen3.5:9b. The browser calls it directly.
             </p>
             <label className="mt-3 block text-xs text-muted" htmlFor="llm-endpoint">
               Address
@@ -259,7 +268,7 @@ function Home() {
               className="mt-1 min-h-11 w-full rounded-xl border border-line bg-bg px-3 text-sm"
             />
             <label className="mt-3 block text-xs text-muted" htmlFor="llm-model">
-              Model name, optional
+              Model name
             </label>
             <input
               id="llm-model"

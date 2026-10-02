@@ -2,7 +2,7 @@
 
 Nasdaq 100 first, then the rest of the S&P 500. For each company, Mole Intel checks the latest investor-relations wire or news item and sets it beside the SEC filing.
 
-Source judgment is written by your local OpenAI-compatible model. The browser calls that address directly, so the model stays on your machine even when the desk runs in Docker. llama.cpp is usually `http://127.0.0.1:8080/v1`. Ollama is usually `http://127.0.0.1:11434/v1`. A headline is still not a figure.
+Source judgment is written by Ollama at `http://192.168.86.35:11434/v1`, model `qwen3.5:9b`. The browser calls that address directly. On the Ollama machine, set `OLLAMA_ORIGINS=*` and restart Ollama so the desk is allowed to ask. A headline is still not a figure.
 
 ## Run
 
