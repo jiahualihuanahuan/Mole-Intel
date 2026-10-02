@@ -52,6 +52,7 @@ export type CompanyProfile = {
   peers: string[]
   links: CompanyLink[]
   jobs: JobPosting[]
+  jobTotal: number
   jobSource: string
   careersUrl: string
 }
@@ -404,6 +405,7 @@ const emptyProfile = (): CompanyProfile => ({
   peers: [],
   links: [],
   jobs: [],
+  jobTotal: 0,
   jobSource: "",
   careersUrl: "",
 })
@@ -496,8 +498,6 @@ async function firstPage(origin: string, label: string, paths: string[]) {
   return null
 }
 
-const AI_ROLE = /artificial intelligence|machine learning|deep learning|generative|foundation model|\bllm\b|applied scientist|computer vision|natural language|mlops|\bai\b/i
-
 function decodeHtml(value: string) {
   return value.replace(/&#34;/g, '"').replace(/&/g, "&").replace(/&#39;/g, "'")
 }
@@ -523,8 +523,8 @@ function asJobs(
   const jobs: JobPosting[] = []
   for (const row of rows) {
     const title = String(row.title || "").replace(/\s+/g, " ").trim()
-    if (!title || !looksEnglish(title) || !AI_ROLE.test(`${title} ${row.team || ""}`)) continue
-    const key = title.toLowerCase()
+    if (!title || !looksEnglish(title)) continue
+    const key = `${title.toLowerCase()}|${String(row.location || "").toLowerCase()}`
     if (seen.has(key)) continue
     seen.add(key)
     jobs.push({
@@ -534,51 +534,76 @@ function asJobs(
       url: String(row.url || ""),
       posted: String(row.posted || "").slice(0, 40),
     })
-    if (jobs.length >= 12) break
+    if (jobs.length >= 400) break
   }
   return jobs
 }
 
 async function workdayJobs(tenant: string, cluster: string, site: string) {
   const endpoint = `https://${tenant}.${cluster}.myworkdayjobs.com/wday/cxs/${tenant}/${site}/jobs`
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText: "machine learning" }),
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!response.ok) return []
-  const body = (await response.json()) as {
-    jobPostings?: { title?: string; externalPath?: string; locationsText?: string; postedOn?: string }[]
+  const rows: { title?: string; location?: string; posted?: string; url?: string }[] = []
+  let total = 0
+  for (let offset = 0; offset < 400; offset += 20) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ appliedFacets: {}, limit: 20, offset, searchText: "" }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) break
+    const body = (await response.json()) as {
+      total?: number
+      jobPostings?: { title?: string; externalPath?: string; locationsText?: string; postedOn?: string }[]
+    }
+    total = body.total || total
+    const page = body.jobPostings ?? []
+    if (page.length === 0) break
+    for (const job of page) {
+      rows.push({
+        title: job.title,
+        location: job.locationsText,
+        posted: job.postedOn,
+        url: `https://${tenant}.${cluster}.myworkdayjobs.com/${site}${job.externalPath || ""}`,
+      })
+    }
+    if (rows.length >= total) break
   }
-  return asJobs(
-    (body.jobPostings ?? []).map((job) => ({
-      title: job.title,
-      location: job.locationsText,
-      posted: job.postedOn,
-      url: `https://${tenant}.${cluster}.myworkdayjobs.com/${site}${job.externalPath || ""}`,
-    })),
-  )
+  const jobs = asJobs(rows)
+  return { jobs, total: total || jobs.length }
 }
 
 async function amazonJobs() {
-  const response = await fetch("https://www.amazon.jobs/en/search.json?base_query=machine%20learning&result_limit=20", {
-    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!response.ok) return []
-  const body = (await response.json()) as {
-    jobs?: { title?: string; job_category?: string; location?: string; job_path?: string; posted_date?: string }[]
+  const rows: { title?: string; team?: string; location?: string; url?: string; posted?: string }[] = []
+  let total = 0
+  for (let offset = 0; offset < 400; offset += 50) {
+    const response = await fetch(
+      `https://www.amazon.jobs/en/search.json?base_query=&result_limit=50&offset=${offset}`,
+      {
+        headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      },
+    )
+    if (!response.ok) break
+    const body = (await response.json()) as {
+      hits?: number
+      jobs?: { title?: string; job_category?: string; location?: string; job_path?: string; posted_date?: string }[]
+    }
+    total = body.hits || total
+    const page = body.jobs ?? []
+    if (page.length === 0) break
+    for (const job of page) {
+      rows.push({
+        title: job.title,
+        team: job.job_category,
+        location: job.location,
+        posted: job.posted_date,
+        url: job.job_path ? `https://www.amazon.jobs${job.job_path}` : "",
+      })
+    }
+    if (rows.length >= total) break
   }
-  return asJobs(
-    (body.jobs ?? []).map((job) => ({
-      title: job.title,
-      team: job.job_category,
-      location: job.location,
-      posted: job.posted_date,
-      url: job.job_path ? `https://www.amazon.jobs${job.job_path}` : "",
-    })),
-  )
+  const jobs = asJobs(rows)
+  return { jobs, total: total || jobs.length }
 }
 
 async function greenhouseJobs(token: string) {
@@ -586,13 +611,14 @@ async function greenhouseJobs(token: string) {
     headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
-  if (!response.ok) return []
+  if (!response.ok) return { jobs: [] as JobPosting[], total: 0 }
   const body = (await response.json()) as {
     jobs?: { title?: string; absolute_url?: string; location?: { name?: string } }[]
   }
-  return asJobs(
+  const jobs = asJobs(
     (body.jobs ?? []).map((job) => ({ title: job.title, location: job.location?.name, url: job.absolute_url })),
   )
+  return { jobs, total: body.jobs?.length || jobs.length }
 }
 
 async function leverJobs(site: string) {
@@ -600,14 +626,15 @@ async function leverJobs(site: string) {
     headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
-  if (!response.ok) return []
+  if (!response.ok) return { jobs: [] as JobPosting[], total: 0 }
   const body = (await response.json()) as {
     text?: string
     hostedUrl?: string
     categories?: { team?: string; location?: string }
   }[]
-  if (!Array.isArray(body)) return []
-  return asJobs(body.map((job) => ({ title: job.text, team: job.categories?.team, location: job.categories?.location, url: job.hostedUrl })))
+  if (!Array.isArray(body)) return { jobs: [] as JobPosting[], total: 0 }
+  const jobs = asJobs(body.map((job) => ({ title: job.text, team: job.categories?.team, location: job.categories?.location, url: job.hostedUrl })))
+  return { jobs, total: body.length }
 }
 
 async function ashbyJobs(board: string) {
@@ -615,11 +642,11 @@ async function ashbyJobs(board: string) {
     headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
-  if (!response.ok) return []
+  if (!response.ok) return { jobs: [] as JobPosting[], total: 0 }
   const body = (await response.json()) as {
     jobs?: { title?: string; department?: string; location?: string; jobUrl?: string; publishedAt?: string }[]
   }
-  return asJobs(
+  const jobs = asJobs(
     (body.jobs ?? []).map((job) => ({
       title: job.title,
       team: job.department,
@@ -628,10 +655,15 @@ async function ashbyJobs(board: string) {
       posted: job.publishedAt,
     })),
   )
+  return { jobs, total: body.jobs?.length || jobs.length }
+}
+
+function roleCount(found: { jobs: JobPosting[]; total?: number; jobTotal?: number }) {
+  return found.total || found.jobTotal || found.jobs.length
 }
 
 async function loadJobs(website: string) {
-  const empty = { jobs: [] as JobPosting[], jobSource: "", careersUrl: website }
+  const none = { jobs: [] as JobPosting[], jobTotal: 0, jobSource: "", careersUrl: website }
   const pages = await Promise.all(
     ["/careers", "/jobs", "/about/careers"].map((path) => fetchHtml(`${website}${path}`)),
   )
@@ -644,8 +676,10 @@ async function loadJobs(website: string) {
   }
   const workday = html.match(/https?:\/\/([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com\/([A-Za-z0-9_]+)/i)
   if (workday && workday[3].toLowerCase() !== "login") {
-    const jobs = await workdayJobs(workday[1], workday[2], workday[3]).catch(() => [])
-    if (jobs.length) return { jobs, jobSource: "Workday", careersUrl }
+    const found = await workdayJobs(workday[1], workday[2], workday[3]).catch(() => none)
+    if (found.jobs.length) {
+      return { jobs: found.jobs, jobTotal: roleCount(found), jobSource: "Workday", careersUrl }
+    }
   }
   const host = (url: string) => {
     try {
@@ -655,25 +689,33 @@ async function loadJobs(website: string) {
     }
   }
   if (/(^|\.)amazon\.(jobs|com)$/i.test(host(website)) || /(^|\.)amazon\.jobs$/i.test(host(careersUrl))) {
-    const jobs = await amazonJobs().catch(() => [])
-    if (jobs.length) return { jobs, jobSource: "Amazon Jobs", careersUrl: "https://www.amazon.jobs/en/search?base_query=machine%20learning" }
+    const found = await amazonJobs().catch(() => none)
+    if (found.jobs.length) {
+      return { jobs: found.jobs, jobTotal: roleCount(found), jobSource: "Amazon Jobs", careersUrl: "https://www.amazon.jobs/en/search" }
+    }
   }
   const greenhouse = html.match(/(?:boards|job-boards)\.greenhouse\.io\/([a-z0-9_-]+)/i)
   if (greenhouse) {
-    const jobs = await greenhouseJobs(greenhouse[1]).catch(() => [])
-    if (jobs.length) return { jobs, jobSource: "Greenhouse", careersUrl }
+    const found = await greenhouseJobs(greenhouse[1]).catch(() => none)
+    if (found.jobs.length) {
+      return { jobs: found.jobs, jobTotal: roleCount(found), jobSource: "Greenhouse", careersUrl }
+    }
   }
   const lever = html.match(/jobs\.lever\.co\/([a-z0-9_-]+)/i)
   if (lever) {
-    const jobs = await leverJobs(lever[1]).catch(() => [])
-    if (jobs.length) return { jobs, jobSource: "Lever", careersUrl }
+    const found = await leverJobs(lever[1]).catch(() => none)
+    if (found.jobs.length) {
+      return { jobs: found.jobs, jobTotal: roleCount(found), jobSource: "Lever", careersUrl }
+    }
   }
   const ashby = html.match(/jobs\.ashbyhq\.com\/([a-z0-9_-]+)/i)
   if (ashby) {
-    const jobs = await ashbyJobs(ashby[1]).catch(() => [])
-    if (jobs.length) return { jobs, jobSource: "Ashby", careersUrl }
+    const found = await ashbyJobs(ashby[1]).catch(() => none)
+    if (found.jobs.length) {
+      return { jobs: found.jobs, jobTotal: roleCount(found), jobSource: "Ashby", careersUrl }
+    }
   }
-  return { ...empty, careersUrl }
+  return { ...none, careersUrl }
 }
 
 async function loadProfile(ticker: string, name: string, sector: string): Promise<CompanyProfile> {
@@ -750,6 +792,7 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
     ])
     profile.pages = [about, careers].filter((page): page is CompanyPage => Boolean(page))
     profile.jobs = hiring.jobs
+    profile.jobTotal = hiring.jobTotal || hiring.jobs.length
     profile.jobSource = hiring.jobSource
     profile.careersUrl = hiring.careersUrl
   }

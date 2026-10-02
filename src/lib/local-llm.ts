@@ -335,6 +335,8 @@ function spawnNote(
         employees?: string
         pages?: { label: string; text: string }[]
         peers?: string[]
+        jobs?: { title: string; team: string; location: string }[]
+        jobTotal?: number
       }
     }
   },
@@ -345,6 +347,12 @@ function spawnNote(
     company: data.brief.name,
     ticker: data.brief.ticker,
     headlines: data.brief.headlines,
+    openRoles: (data.brief.profile?.jobs ?? []).map((role) => ({
+      title: role.title,
+      team: role.team,
+      location: role.location,
+    })),
+    roleCount: data.brief.profile?.jobTotal || data.brief.profile?.jobs?.length || 0,
   }
   let child: ChildProcess
   try {
@@ -412,6 +420,12 @@ function noteInput(data: {
           text: String(page.text ?? "").slice(0, 400),
         })),
         peers: (data?.brief?.profile?.peers ?? []).slice(0, 8).map((peer) => String(peer).slice(0, 80)),
+        jobs: (data?.brief?.profile?.jobs ?? []).slice(0, 400).map((role) => ({
+          title: String(role.title ?? "").slice(0, 160),
+          team: String(role.team ?? "").slice(0, 80),
+          location: String(role.location ?? "").slice(0, 80),
+        })),
+        jobTotal: Number(data?.brief?.profile?.jobTotal ?? data?.brief?.profile?.jobs?.length ?? 0) || 0,
       },
     },
   }

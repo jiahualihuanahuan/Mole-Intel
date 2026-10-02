@@ -322,16 +322,17 @@ function Home() {
                     </div>
                   )}
                   <div>
-                    <h2 className="text-xs tracking-wide text-muted">AI hiring</h2>
+                    <h2 className="text-xs tracking-wide text-muted">Open roles</h2>
                     <p className="mt-1 text-xs text-muted">
-                      Open roles whose title mentions AI or machine learning.
-                      {brief.profile.jobSource ? ` From ${brief.profile.jobSource}.` : ""} Not sent to the model.
+                      {brief.profile.jobTotal || brief.profile.jobs.length} English postings
+                      {brief.profile.jobSource ? ` from ${brief.profile.jobSource}` : ""}. All of them go into the digest.
+                      {brief.profile.jobs.length > 12 ? " Showing 12." : ""}
                     </p>
                     {brief.profile.jobs.length === 0 && (
-                      <p className="mt-2 text-sm text-muted">No public AI role list came back for this name.</p>
+                      <p className="mt-2 text-sm text-muted">No public job list came back for this name.</p>
                     )}
                     <ul className="mt-2 space-y-2">
-                      {brief.profile.jobs.map((job) => (
+                      {brief.profile.jobs.slice(0, 12).map((job) => (
                         <li key={job.url || job.title} className="text-sm">
                           {job.url ? (
                             <a href={job.url} target="_blank" rel="noreferrer" className="text-pine underline">
@@ -354,7 +355,7 @@ function Home() {
                   </div>
                   <div>
                     <h2 className="text-xs tracking-wide text-muted">Company read</h2>
-                    <p className="mt-1 text-xs text-muted">From news headlines only.</p>
+                    <p className="mt-1 text-xs text-muted">From the open roles and the news.</p>
                     {reviewState === "loading" && review && (
                       <p className="mt-2 text-sm text-muted">
                         Updating the note. Showing the last one
@@ -369,7 +370,7 @@ function Home() {
                       <div className="mt-2 space-y-3">
                         {review.digest && (
                           <p className="text-sm leading-relaxed">
-                            <span className="font-medium">In the words. </span>
+                            <span className="font-medium">Where they are heading. </span>
                             {review.digest}
                           </p>
                         )}
