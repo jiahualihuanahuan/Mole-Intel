@@ -4,7 +4,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV VITE_AUTH_ENABLED=false
 ENV MOLE_PRESET=node
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 
