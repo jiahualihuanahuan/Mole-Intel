@@ -325,7 +325,7 @@ function Home() {
                     <h2 className="text-xs tracking-wide text-muted">Open roles</h2>
                     <p className="mt-1 text-xs text-muted">
                       {brief.profile.jobTotal || brief.profile.jobs.length} English postings
-                      {brief.profile.jobSource ? ` from ${brief.profile.jobSource}` : ""}. All of them go into the digest.
+                      {brief.profile.jobSource ? ` From ${brief.profile.jobSource}.` : ""} The note uses them only if they confirm or contradict the news.
                       {brief.profile.jobs.length > 12 ? " Showing 12." : ""}
                     </p>
                     {brief.profile.jobs.length === 0 && (
@@ -355,7 +355,7 @@ function Home() {
                   </div>
                   <div>
                     <h2 className="text-xs tracking-wide text-muted">Company read</h2>
-                    <p className="mt-1 text-xs text-muted">From the open roles and the news.</p>
+                    <p className="mt-1 text-xs text-muted">A short read of where the company stands, from the news.</p>
                     {reviewState === "loading" && review && (
                       <p className="mt-2 text-sm text-muted">
                         Updating the note. Showing the last one
@@ -370,7 +370,7 @@ function Home() {
                       <div className="mt-2 space-y-3">
                         {review.digest && (
                           <p className="text-sm leading-relaxed">
-                            <span className="font-medium">Where they are heading. </span>
+                            <span className="font-medium">The news. </span>
                             {review.digest}
                           </p>
                         )}
@@ -382,7 +382,7 @@ function Home() {
                         ))}
                         {review.risks && (
                           <p className="text-sm leading-relaxed">
-                            <span className="font-medium">Where the reading is thin. </span>
+                            <span className="font-medium">Do not take this at face value. </span>
                             {review.risks}
                           </p>
                         )}
