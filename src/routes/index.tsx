@@ -12,6 +12,7 @@ type Filter = "all" | "ndx" | "spx"
 function Home() {
   const fetchNews = useServerFn(getNewsBatch)
   const fetchBrief = useServerFn(getCompanyBrief)
+  const fetchReview = useServerFn(askLocalModel)
   const [filter, setFilter] = useState<Filter>("ndx")
   const [query, setQuery] = useState("")
   const [news, setNews] = useState<Record<string, Headline[]>>({})
@@ -135,12 +136,16 @@ function Home() {
     let cancelled = false
     setReviewState("loading")
     setReviewError("")
-    askLocalModel(endpoint, modelName, brief)
+    fetchReview({ data: { endpoint, model: modelName, brief } })
       .then((value) => {
-        if (!cancelled) {
-          setReview(value)
-          setReviewState("idle")
+        if (cancelled) return
+        if (!value.ok) {
+          setReviewState("error")
+          setReviewError(value.error)
+          return
         }
+        setReview(value.review)
+        setReviewState("idle")
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -151,7 +156,7 @@ function Home() {
     return () => {
       cancelled = true
     }
-  }, [armed, brief, endpoint, modelName, settingsReady])
+  }, [armed, brief, endpoint, fetchReview, modelName, settingsReady])
 
   function saveModel() {
     const next = endpoint.trim()
@@ -256,7 +261,7 @@ function Home() {
           <div className="rounded-2xl border border-line bg-surface p-4">
             <h2 className="text-xs tracking-wide text-muted">Local model</h2>
             <p className="mt-1 text-sm text-muted">
-              Ollama at 192.168.86.35, model qwen3.5:9b. The browser calls it directly.
+              Ollama qwen3.5:9b at 192.168.86.35. The desk asks it. Your browser does not.
             </p>
             <label className="mt-3 block text-xs text-muted" htmlFor="llm-endpoint">
               Address
