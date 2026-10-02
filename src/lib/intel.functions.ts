@@ -743,13 +743,12 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
     links.push({ label: "LinkedIn", url: `https://www.linkedin.com/search/results/companies/?keywords=${query}` })
   }
   if (profile.website) {
-    const [about, newsroom, careers, hiring] = await Promise.all([
+    const [about, careers, hiring] = await Promise.all([
       firstPage(profile.website, "About", ["/about", "/about-us", "/company"]),
-      firstPage(profile.website, "Newsroom", ["/newsroom", "/news", "/press", "/blog"]),
       firstPage(profile.website, "Careers", ["/careers", "/jobs"]),
       loadJobs(profile.website),
     ])
-    profile.pages = [about, newsroom, careers].filter((page): page is CompanyPage => Boolean(page))
+    profile.pages = [about, careers].filter((page): page is CompanyPage => Boolean(page))
     profile.jobs = hiring.jobs
     profile.jobSource = hiring.jobSource
     profile.careersUrl = hiring.careersUrl
