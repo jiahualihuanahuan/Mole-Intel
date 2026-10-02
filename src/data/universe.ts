@@ -1,11 +1,12 @@
 import { markets } from "./markets"
+import { russell } from "./russell"
 
 export type UniverseRow = {
   ticker: string
   name: string
   sector: string
-  index: "Nasdaq 100" | "S&P 500" | "TSX 60" | "EURO STOXX 50" | "FTSE 100" | "Nikkei 225" | "ASX 50" | "NZX 50" | "KOSPI"
-  priority: 0 | 1 | 2
+  index: "Nasdaq 100" | "S&P 500" | "TSX 60" | "EURO STOXX 50" | "FTSE 100" | "Nikkei 225" | "ASX 50" | "NZX 50" | "KOSPI" | "Russell 2000"
+  priority: 0 | 1 | 2 | 3
 }
 
 const listed: UniverseRow[] = [
@@ -529,4 +530,4 @@ const listed: UniverseRow[] = [
   { ticker: "ZTS", name: "Zoetis", sector: "Health Care", index: "S&P 500", priority: 1 },
 ]
 
-export const universe: UniverseRow[] = listed.concat(markets)
+export const universe: UniverseRow[] = listed.concat(markets, russell)
