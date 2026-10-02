@@ -51,22 +51,23 @@ function scoreFrom(body: string, model: string): LocalReview | null {
     try {
       const parsed = JSON.parse(objects[i]) as {
         digest?: unknown
+        summary?: unknown
         thesis?: unknown
+        view?: unknown
         analysis?: unknown
+        note?: unknown
+        body?: unknown
         risks?: unknown
         gaps?: unknown
       }
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        (!("digest" in parsed) && !("thesis" in parsed) && !("analysis" in parsed))
-      ) {
-        continue
-      }
+      const digest = parsed?.digest ?? parsed?.summary
+      const thesis = parsed?.thesis ?? parsed?.view
+      const analysis = parsed?.analysis ?? parsed?.note ?? parsed?.body
+      if (!parsed || typeof parsed !== "object" || (digest == null && thesis == null && analysis == null)) continue
       return {
-        digest: String(parsed.digest || "").slice(0, 1200),
-        thesis: String(parsed.thesis || "").slice(0, 500),
-        analysis: String(parsed.analysis || "").slice(0, 4000),
+        digest: String(digest || "").slice(0, 1200),
+        thesis: String(thesis || "").slice(0, 500),
+        analysis: String(analysis || "").slice(0, 8000),
         risks: String(parsed.risks || "").slice(0, 1200),
         gaps: String(parsed.gaps || "").slice(0, 800),
         model,
@@ -104,7 +105,27 @@ function readScore(raw: string, model: string): LocalReview | null {
 }
 
 const ANALYST =
-  "You are a senior buy-side equity analyst. Write a deep note on this one company from the packet only. Use the recent filings and headlines as evidence. A headline is not a figure. If a wire and a filing disagree, the filing wins. Do not invent numbers, guidance, valuation, or a price target. If the packet is too thin for a view, say so. Think first. Then end with JSON only: {\"digest\": string, \"thesis\": string, \"analysis\": string, \"risks\": string, \"gaps\": string}. digest is 3 to 5 sentences on what the recent filings and headlines actually say, naming the form and the date. thesis is the variant view in one or two sentences, or an explicit statement that the packet does not support one. analysis is the deep note: what the business setup looks like from these sources, what changed, and what a long or a short would be betting on. risks is what could make that view wrong. gaps is what you still need that this packet does not contain."
+  "You are a senior buy-side equity analyst. Keep the reasoning in the thinking channel. The reply itself must be one JSON object and nothing else: {\"digest\":\"string\",\"thesis\":\"string\",\"analysis\":\"string\",\"risks\":\"string\",\"gaps\":\"string\"}. Use only the packet. Do not invent numbers or a price target. Never write a thinking process, a numbered plan, or a restatement of these instructions. digest is what the recent filings and headlines say. thesis is the variant view, or a clear statement that the packet is too thin. analysis is the deep note. risks is what could be wrong. gaps is what is still missing."
+
+const FINAL =
+  "Output one JSON object and nothing else. Keys are digest, thesis, analysis, risks, gaps. No title, no thinking process, no preamble. Use only the packet. Do not invent numbers or a price target. digest is what the recent filings and headlines say. thesis is the view, or that the packet is too thin. analysis is the deep buy-side note. risks is what could be wrong. gaps is what is missing."
+
+function looksLikeScratch(text: string) {
+  return /thinking process|analyze the request|\*\*role:\*\*|\*\*task:\*\*/i.test(text.slice(0, 600))
+}
+
+function proseNote(raw: string, model: string): LocalReview | null {
+  let text = stripThink(raw).trim()
+  const marker = text.search(/\n(?:final answer|final note|buy-side note)\b/i)
+  if (marker >= 0) text = text.slice(marker).replace(/^(?:final answer|final note|buy-side note)\b[:\s]*/i, "").trim()
+  if (!text || looksLikeScratch(text)) return null
+  if (text.length < 80) return null
+  return { digest: "", thesis: "", analysis: text.slice(0, 8000), risks: "", gaps: "", model }
+}
+
+function reviewFrom(content: string, thought: string, model: string) {
+  return readScore(content, model) ?? readScore(`${content}\n${thought}`, model) ?? proseNote(content, model)
+}
 
 function explainFetch(error: unknown, target: string) {
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
@@ -130,11 +151,11 @@ function textFrom(payload: unknown) {
   return { content: message?.content ?? "", thought: message?.reasoning || message?.thinking || "" }
 }
 
-async function complete(root: string, model: string, packet: unknown, signal: AbortSignal) {
+async function complete(root: string, model: string, packet: unknown, signal: AbortSignal, think: boolean) {
   const url = new URL(root)
   const origin = `${url.protocol}//${url.host}`
   const messages = [
-    { role: "system", content: ANALYST },
+    { role: "system", content: think ? ANALYST : FINAL },
     { role: "user", content: JSON.stringify(packet) },
   ]
   const native = await fetch(`${origin}/api/chat`, {
@@ -144,9 +165,9 @@ async function complete(root: string, model: string, packet: unknown, signal: Ab
     body: JSON.stringify({
       model,
       stream: false,
-      think: true,
+      think,
       messages,
-      options: { temperature: 0.2, num_predict: 8192 },
+      options: { temperature: 0.2, num_predict: think ? 8192 : 2500 },
     }),
   })
   if (native.status !== 404) return native
@@ -157,12 +178,33 @@ async function complete(root: string, model: string, packet: unknown, signal: Ab
     body: JSON.stringify({
       model,
       stream: false,
-      think: true,
+      think,
       temperature: 0.2,
-      max_tokens: 8192,
+      max_tokens: think ? 8192 : 2500,
       messages,
     }),
   })
+}
+
+async function readModelReply(
+  response: Response,
+  model: string,
+): Promise<{ ok: true; review: LocalReview | null } | { ok: false; error: string }> {
+  let raw = ""
+  try {
+    raw = await response.text()
+  } catch (error) {
+    return { ok: false, error: explainFetch(error, "Ollama") }
+  }
+  if (!response.ok) {
+    return { ok: false, error: `Ollama returned ${response.status}. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
+  }
+  try {
+    const { content, thought } = textFrom(JSON.parse(raw) as unknown)
+    return { ok: true, review: reviewFrom(content, thought, model) }
+  } catch {
+    return { ok: true, review: proseNote(raw, model) }
+  }
 }
 
 type NoteResult = { ok: true; review: LocalReview } | { ok: false; error: string }
@@ -204,10 +246,12 @@ async function writeNote(
     return { ok: false, error: "The model address is not a valid URL" }
   }
   let response: Response | null = null
+  let used = root
   let failure = `The desk could not reach ${root}.`
   for (const target of targets) {
     try {
-      response = await complete(target, model, packet, signal)
+      response = await complete(target, model, packet, signal, true)
+      used = target
       break
     } catch (error) {
       response = null
@@ -215,27 +259,20 @@ async function writeNote(
     }
   }
   if (!response) return { ok: false, error: failure }
-  let raw = ""
-  try {
-    raw = await response.text()
-  } catch (error) {
-    return { ok: false, error: explainFetch(error, root) }
-  }
-  if (!response.ok) {
-    return { ok: false, error: `Ollama returned ${response.status} for ${model}. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
-  }
-  let payload: unknown
-  try {
-    payload = JSON.parse(raw)
-  } catch {
-    return { ok: false, error: `Ollama did not return JSON. ${raw.replace(/\s+/g, " ").slice(0, 240)}` }
-  }
-  const { content, thought } = textFrom(payload)
-  const review = readScore(content, model) ?? readScore(`${content}\n${thought}`, model)
+  const first = await readModelReply(response, model)
+  if (!first.ok) return first
+  let review = first.review
   if (!review) {
-    const preview = (content || thought || raw).replace(/\s+/g, " ").slice(0, 240)
-    return { ok: false, error: preview ? `Ollama answered, but not with a note. ${preview}` : "Ollama returned an empty reply" }
+    try {
+      response = await complete(used, model, packet, signal, false)
+    } catch (error) {
+      return { ok: false, error: explainFetch(error, used) }
+    }
+    const second = await readModelReply(response, model)
+    if (!second.ok) return second
+    review = second.review
   }
+  if (!review) return { ok: false, error: "Ollama did not write the note." }
   return { ok: true, review }
 }
 
