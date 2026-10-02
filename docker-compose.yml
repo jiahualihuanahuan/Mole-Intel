@@ -3,14 +3,11 @@ name: mole-intel
 services:
   mole-intel:
     build: .
-    ports:
-      - "8090:8090"
+    network_mode: host
     environment:
       HOST: 0.0.0.0
       PORT: "8090"
       OLLAMA_BASE_URL: http://192.168.86.35:11434/v1
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
       test:

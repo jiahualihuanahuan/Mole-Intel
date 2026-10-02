@@ -2,7 +2,7 @@
 
 Nasdaq 100 first, then the rest of the S&P 500. For each company, Mole Intel checks the latest investor-relations wire or news item and sets it beside the SEC filing.
 
-Source judgment is written by Ollama at `http://192.168.86.35:11434/v1`, model `qwen3.5:9b`. The desk server asks Ollama, so the browser does not need `OLLAMA_ORIGINS`. A headline is still not a figure.
+Source judgment is written by Ollama at `http://192.168.86.35:11434/v1`, model `qwen3.5:9b`. The desk asks Ollama's own `/api/chat` and waits for the full answer, so a long thinking run is not cut off mid-stream. The container uses the host network so it can reach that address. Open `http://127.0.0.1:8090`.
 
 ## Run
 

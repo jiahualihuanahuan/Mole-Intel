@@ -150,7 +150,12 @@ function Home() {
       .catch((error: unknown) => {
         if (!cancelled) {
           setReviewState("error")
-          setReviewError(error instanceof Error ? error.message : "The local model did not answer")
+          const message = error instanceof Error ? error.message : "The local model did not answer"
+          setReviewError(
+            message === "Failed to fetch"
+              ? "The page lost the connection while qwen3.5 was still running."
+              : message,
+          )
         }
       })
     return () => {
