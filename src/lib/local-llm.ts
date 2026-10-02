@@ -344,18 +344,7 @@ function spawnNote(
   const packet = {
     company: data.brief.name,
     ticker: data.brief.ticker,
-    entity: data.brief.entity,
-    filings: data.brief.filings.map((item) => ({
-      form: item.form,
-      filed: item.date,
-      event: item.items || "",
-    })),
     headlines: data.brief.headlines,
-    companyPages: data.brief.profile?.pages ?? [],
-    summary: data.brief.profile?.summary || "",
-    website: data.brief.profile?.website || "",
-    peers: data.brief.profile?.peers ?? [],
-    read: "Words only: news, about, newsroom, and careers. Do not use or mention financial figures.",
   }
   let child: ChildProcess
   try {

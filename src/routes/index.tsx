@@ -28,6 +28,7 @@ function Home() {
   const pollReview = useServerFn(pollLocalModel)
   const cancelReview = useServerFn(cancelLocalModel)
   const [query, setQuery] = useState("")
+  const [searchOpen, setSearchOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsError, setSettingsError] = useState("")
   const [selected, setSelected] = useState<UniverseRow | null>(universe[0] ?? null)
@@ -42,13 +43,13 @@ function Home() {
   const [reviewState, setReviewState] = useState<"idle" | "loading" | "error">("idle")
   const [reviewError, setReviewError] = useState("")
 
-  const rows = useMemo(() => {
+  const matches = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return universe
-    return universe.filter((row) => row.ticker.toLowerCase().includes(q) || row.name.toLowerCase().includes(q))
+    if (!q) return []
+    return universe
+      .filter((row) => row.ticker.toLowerCase().includes(q) || row.name.toLowerCase().includes(q))
+      .slice(0, 8)
   }, [query])
-
-  const listed = useMemo(() => rows.slice(0, 40), [rows])
 
   useEffect(() => {
     const saved = localStorage.getItem("mole-intel-llm")
@@ -171,13 +172,43 @@ function Home() {
   return (
     <main className="min-h-screen">
       <header className="flex items-center gap-2 border-b border-line px-4 py-3 sm:px-6">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Ticker or company"
-          aria-label="Ticker or company"
-          className="min-h-11 flex-1 rounded-xl border border-line bg-surface px-3 text-sm"
-        />
+        <div className="relative flex-1">
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setSearchOpen(true)
+            }}
+            onFocus={() => setSearchOpen(true)}
+            onBlur={() => setSearchOpen(false)}
+            placeholder="Ticker or company"
+            aria-label="Ticker or company"
+            className="min-h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm"
+          />
+          {searchOpen && query.trim() && (
+            <ul className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-xl border border-line bg-surface">
+              {matches.length === 0 && <li className="px-3 py-2 text-sm text-muted">No company</li>}
+              {matches.map((row) => (
+                <li key={row.ticker}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      setSelected(row)
+                      setQuery("")
+                      setSearchOpen(false)
+                    }}
+                    className="flex w-full items-baseline gap-2 px-3 py-2 text-left hover:bg-chip"
+                  >
+                    <span className="font-medium">{row.ticker}</span>
+                    <span className="text-sm text-muted">{row.name}</span>
+                    <span className="ml-auto text-xs text-muted">{row.index}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
@@ -226,7 +257,7 @@ function Home() {
           </div>
         </div>
       )}
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div>
         <section className="px-4 py-6 sm:px-8">
           {selected && (
             <div>
@@ -290,7 +321,39 @@ function Home() {
                     </div>
                   )}
                   <div>
+                    <h2 className="text-xs tracking-wide text-muted">AI hiring</h2>
+                    <p className="mt-1 text-xs text-muted">
+                      Open roles whose title mentions AI or machine learning.
+                      {brief.profile.jobSource ? ` From ${brief.profile.jobSource}.` : ""} Not sent to the model.
+                    </p>
+                    {brief.profile.jobs.length === 0 && (
+                      <p className="mt-2 text-sm text-muted">No public AI role list came back for this name.</p>
+                    )}
+                    <ul className="mt-2 space-y-2">
+                      {brief.profile.jobs.map((job) => (
+                        <li key={job.url || job.title} className="text-sm">
+                          {job.url ? (
+                            <a href={job.url} target="_blank" rel="noreferrer" className="text-pine underline">
+                              {job.title}
+                            </a>
+                          ) : (
+                            <span>{job.title}</span>
+                          )}
+                          <span className="mt-1 block text-xs text-muted">
+                            {[job.team, job.location, job.posted].filter(Boolean).join(" · ")}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {brief.profile.careersUrl && (
+                      <a href={brief.profile.careersUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-pine underline">
+                        Careers page
+                      </a>
+                    )}
+                  </div>
+                  <div>
                     <h2 className="text-xs tracking-wide text-muted">Company read</h2>
+                    <p className="mt-1 text-xs text-muted">From news headlines only.</p>
                     {reviewState === "loading" && review && (
                       <p className="mt-2 text-sm text-muted">
                         Updating the note. Showing the last one
@@ -386,28 +449,6 @@ function Home() {
             </div>
           )}
         </section>
-        <aside className="border-t border-line lg:sticky lg:top-0 lg:max-h-screen lg:overflow-y-auto lg:border-t-0 lg:border-l">
-          <ul>
-            {listed.map((row) => {
-              const active = selected?.ticker === row.ticker
-              return (
-                <li key={row.ticker} className="border-b border-line">
-                  <button
-                    type="button"
-                    onClick={() => setSelected(row)}
-                    className={"w-full px-4 py-2.5 text-left " + (active ? "bg-chip" : "hover:bg-surface")}
-                  >
-                    <span className="font-medium">{row.ticker}</span>
-                    <span className="ml-2 text-sm text-muted">{row.name}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-          {rows.length > 40 && (
-            <p className="px-4 py-3 text-xs text-muted">Showing 40 of {rows.length}. Search to narrow.</p>
-          )}
-        </aside>
       </div>
     </main>
   )

@@ -40,6 +40,8 @@ export type FactLine = {
 export type CompanyPage = { label: string; url: string; text: string }
 export type CompanyLink = { label: string; url: string }
 
+export type JobPosting = { title: string; team: string; location: string; url: string; posted: string }
+
 export type CompanyProfile = {
   sic: string
   website: string
@@ -49,6 +51,9 @@ export type CompanyProfile = {
   pages: CompanyPage[]
   peers: string[]
   links: CompanyLink[]
+  jobs: JobPosting[]
+  jobSource: string
+  careersUrl: string
 }
 
 export type CompanyBrief = {
@@ -394,6 +399,9 @@ const emptyProfile = (): CompanyProfile => ({
   pages: [],
   peers: [],
   links: [],
+  jobs: [],
+  jobSource: "",
+  careersUrl: "",
 })
 
 const profileCache = new Map<string, { at: number; profile: CompanyProfile }>()
@@ -473,6 +481,186 @@ async function firstPage(origin: string, label: string, paths: string[]) {
   return null
 }
 
+const AI_ROLE = /artificial intelligence|machine learning|deep learning|generative|foundation model|\bllm\b|applied scientist|computer vision|natural language|mlops|\bai\b/i
+
+function decodeHtml(value: string) {
+  return value.replace(/&#34;/g, '"').replace(/&/g, "&").replace(/&#39;/g, "'")
+}
+
+async function fetchHtml(url: string) {
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "text/html" },
+      signal: AbortSignal.timeout(6000),
+      redirect: "follow",
+    })
+    if (!response.ok) return { ok: false, url, html: "" }
+    return { ok: true, url: response.url || url, html: decodeHtml((await response.text()).slice(0, 250000)) }
+  } catch {
+    return { ok: false, url, html: "" }
+  }
+}
+
+function asJobs(
+  rows: { title?: string; team?: string; location?: string; url?: string; posted?: string }[],
+): JobPosting[] {
+  const seen = new Set<string>()
+  const jobs: JobPosting[] = []
+  for (const row of rows) {
+    const title = String(row.title || "").replace(/\s+/g, " ").trim()
+    if (!title || !AI_ROLE.test(`${title} ${row.team || ""}`)) continue
+    const key = title.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    jobs.push({
+      title: title.slice(0, 160),
+      team: String(row.team || "").slice(0, 80),
+      location: String(row.location || "").slice(0, 80),
+      url: String(row.url || ""),
+      posted: String(row.posted || "").slice(0, 40),
+    })
+    if (jobs.length >= 12) break
+  }
+  return jobs
+}
+
+async function workdayJobs(tenant: string, cluster: string, site: string) {
+  const endpoint = `https://${tenant}.${cluster}.myworkdayjobs.com/wday/cxs/${tenant}/${site}/jobs`
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "User-Agent": UA, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText: "machine learning" }),
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!response.ok) return []
+  const body = (await response.json()) as {
+    jobPostings?: { title?: string; externalPath?: string; locationsText?: string; postedOn?: string }[]
+  }
+  return asJobs(
+    (body.jobPostings ?? []).map((job) => ({
+      title: job.title,
+      location: job.locationsText,
+      posted: job.postedOn,
+      url: `https://${tenant}.${cluster}.myworkdayjobs.com/${site}${job.externalPath || ""}`,
+    })),
+  )
+}
+
+async function amazonJobs() {
+  const response = await fetch("https://www.amazon.jobs/en/search.json?base_query=machine%20learning&result_limit=20", {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!response.ok) return []
+  const body = (await response.json()) as {
+    jobs?: { title?: string; job_category?: string; location?: string; job_path?: string; posted_date?: string }[]
+  }
+  return asJobs(
+    (body.jobs ?? []).map((job) => ({
+      title: job.title,
+      team: job.job_category,
+      location: job.location,
+      posted: job.posted_date,
+      url: job.job_path ? `https://www.amazon.jobs${job.job_path}` : "",
+    })),
+  )
+}
+
+async function greenhouseJobs(token: string) {
+  const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${token}/jobs`, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!response.ok) return []
+  const body = (await response.json()) as {
+    jobs?: { title?: string; absolute_url?: string; location?: { name?: string } }[]
+  }
+  return asJobs(
+    (body.jobs ?? []).map((job) => ({ title: job.title, location: job.location?.name, url: job.absolute_url })),
+  )
+}
+
+async function leverJobs(site: string) {
+  const response = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!response.ok) return []
+  const body = (await response.json()) as {
+    text?: string
+    hostedUrl?: string
+    categories?: { team?: string; location?: string }
+  }[]
+  if (!Array.isArray(body)) return []
+  return asJobs(body.map((job) => ({ title: job.text, team: job.categories?.team, location: job.categories?.location, url: job.hostedUrl })))
+}
+
+async function ashbyJobs(board: string) {
+  const response = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${board}`, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  })
+  if (!response.ok) return []
+  const body = (await response.json()) as {
+    jobs?: { title?: string; department?: string; location?: string; jobUrl?: string; publishedAt?: string }[]
+  }
+  return asJobs(
+    (body.jobs ?? []).map((job) => ({
+      title: job.title,
+      team: job.department,
+      location: job.location,
+      url: job.jobUrl,
+      posted: job.publishedAt,
+    })),
+  )
+}
+
+async function loadJobs(website: string) {
+  const empty = { jobs: [] as JobPosting[], jobSource: "", careersUrl: website }
+  const pages = await Promise.all(
+    ["/careers", "/jobs", "/about/careers"].map((path) => fetchHtml(`${website}${path}`)),
+  )
+  let html = pages.map((page) => page.html).join("\n")
+  const careersUrl = pages.find((page) => page.ok)?.url || website
+  const deeper = html.match(/https?:\/\/(?:jobs|careers)\.[a-z0-9.-]+\/[a-z0-9./_-]*/i)
+  if (deeper && !/myworkdayjobs|greenhouse|lever\.co|ashbyhq/i.test(html)) {
+    const next = await fetchHtml(deeper[0])
+    if (next.html) html += `\n${next.html}`
+  }
+  const workday = html.match(/https?:\/\/([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com\/([A-Za-z0-9_]+)/i)
+  if (workday && workday[3].toLowerCase() !== "login") {
+    const jobs = await workdayJobs(workday[1], workday[2], workday[3]).catch(() => [])
+    if (jobs.length) return { jobs, jobSource: "Workday", careersUrl }
+  }
+  const host = (url: string) => {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ""
+    }
+  }
+  if (/(^|\.)amazon\.(jobs|com)$/i.test(host(website)) || /(^|\.)amazon\.jobs$/i.test(host(careersUrl))) {
+    const jobs = await amazonJobs().catch(() => [])
+    if (jobs.length) return { jobs, jobSource: "Amazon Jobs", careersUrl: "https://www.amazon.jobs/en/search?base_query=machine%20learning" }
+  }
+  const greenhouse = html.match(/(?:boards|job-boards)\.greenhouse\.io\/([a-z0-9_-]+)/i)
+  if (greenhouse) {
+    const jobs = await greenhouseJobs(greenhouse[1]).catch(() => [])
+    if (jobs.length) return { jobs, jobSource: "Greenhouse", careersUrl }
+  }
+  const lever = html.match(/jobs\.lever\.co\/([a-z0-9_-]+)/i)
+  if (lever) {
+    const jobs = await leverJobs(lever[1]).catch(() => [])
+    if (jobs.length) return { jobs, jobSource: "Lever", careersUrl }
+  }
+  const ashby = html.match(/jobs\.ashbyhq\.com\/([a-z0-9_-]+)/i)
+  if (ashby) {
+    const jobs = await ashbyJobs(ashby[1]).catch(() => [])
+    if (jobs.length) return { jobs, jobSource: "Ashby", careersUrl }
+  }
+  return { ...empty, careersUrl }
+}
+
 async function loadProfile(ticker: string, name: string, sector: string): Promise<CompanyProfile> {
   const cached = profileCache.get(ticker)
   if (cached && Date.now() - cached.at < 6 * 60 * 60 * 1000) return cached.profile
@@ -540,12 +728,16 @@ async function loadProfile(ticker: string, name: string, sector: string): Promis
     links.push({ label: "LinkedIn", url: `https://www.linkedin.com/search/results/companies/?keywords=${query}` })
   }
   if (profile.website) {
-    const pages = await Promise.all([
+    const [about, newsroom, careers, hiring] = await Promise.all([
       firstPage(profile.website, "About", ["/about", "/about-us", "/company"]),
       firstPage(profile.website, "Newsroom", ["/newsroom", "/news", "/press", "/blog"]),
       firstPage(profile.website, "Careers", ["/careers", "/jobs"]),
+      loadJobs(profile.website),
     ])
-    profile.pages = pages.filter((page): page is CompanyPage => Boolean(page))
+    profile.pages = [about, newsroom, careers].filter((page): page is CompanyPage => Boolean(page))
+    profile.jobs = hiring.jobs
+    profile.jobSource = hiring.jobSource
+    profile.careersUrl = hiring.careersUrl
   }
   profile.links = links
   profileCache.set(ticker, { at: Date.now(), profile })
