@@ -10,6 +10,6 @@ Source judgment is written by your local OpenAI-compatible model. The browser ca
 docker compose up --build
 ```
 
-Open `http://127.0.0.1:3000`. The desk uses port 3000 so it does not take the port your local model is already using.
+Open `http://127.0.0.1:8090`. The desk uses port 8090 so it does not take the port your local model is already using.
 
 Universe: 101 Nasdaq-100 names, then S&P 500 names that are not already in the Nasdaq 100.

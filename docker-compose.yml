@@ -4,10 +4,10 @@ services:
   mole-intel:
     build: .
     ports:
-      - "3000:3000"
+      - "8090:8090"
     environment:
       HOST: 0.0.0.0
-      PORT: "3000"
+      PORT: "8090"
     restart: unless-stopped
     healthcheck:
       test:
@@ -15,7 +15,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:8090/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
