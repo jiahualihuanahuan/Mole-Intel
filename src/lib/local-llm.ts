@@ -389,7 +389,7 @@ function noteInput(data: {
     model: String(data?.model ?? DEFAULT_MODEL).trim().slice(0, 80),
     brief: {
       name: String(data?.brief?.name ?? "").slice(0, 140),
-      ticker: String(data?.brief?.ticker ?? "").slice(0, 12),
+      ticker: String(data?.brief?.ticker ?? "").slice(0, 16),
       entity: String(data?.brief?.entity ?? "").slice(0, 400),
       filings: (data?.brief?.filings ?? []).slice(0, 8).map((item) => ({
         form: String(item.form ?? "").slice(0, 20),

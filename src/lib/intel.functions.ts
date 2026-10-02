@@ -806,7 +806,7 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     ticker: String(data?.ticker ?? "")
       .toUpperCase()
       .replace(/[^A-Z0-9.-]/g, "")
-      .slice(0, 8),
+      .slice(0, 16),
     name: String(data?.name ?? "").slice(0, 140),
   }))
   .handler(async ({ data }): Promise<CompanyBrief> => {
