@@ -1,4 +1,17 @@
 import { createServerFn } from "@tanstack/react-start"
+import {
+  archiveCounts,
+  filingBackfillDone,
+  latestNote,
+  markFilingBackfill,
+  markNewsBackfill,
+  newsBackfillDone,
+  recentFilings,
+  recentHeadlines,
+  saveFilings,
+  saveHeadlines,
+  type StoredNote,
+} from "@/lib/store"
 
 export type Headline = {
   title: string
@@ -33,6 +46,8 @@ export type CompanyBrief = {
   filings: Filing[]
   facts: FactLine[]
   headlines: Headline[]
+  archive: { filings: number; headlines: number }
+  priorNote: StoredNote | null
   rubric: { question: string; note: string }[]
 }
 
@@ -66,7 +81,7 @@ function classify(title: string, source: string, sourceUrl: string): "ir" | "new
   return "news"
 }
 
-function parseRss(xml: string): Headline[] {
+function parseRss(xml: string, limit = 6): Headline[] {
   const items: Headline[] = []
   for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
     const block = match[1]
@@ -84,12 +99,12 @@ function parseRss(xml: string): Headline[] {
       sourceUrl,
       kind: classify(title, source, sourceUrl),
     })
-    if (items.length >= 6) break
+    if (items.length >= limit) break
   }
   return items
 }
 
-async function rss(query: string): Promise<Headline[]> {
+async function rss(query: string, limit = 6): Promise<Headline[]> {
   const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
@@ -99,7 +114,7 @@ async function rss(query: string): Promise<Headline[]> {
       headers: { "User-Agent": UA, Accept: "application/rss+xml, application/xml" },
     })
     if (!response.ok) return []
-    return parseRss(await response.text())
+    return parseRss(await response.text(), limit)
   } catch {
     return []
   } finally {
@@ -170,6 +185,70 @@ function itemLabel(raw: string) {
     .filter((code) => code && code !== "9.01")
     .map((code) => EIGHT_K[code] || code)
   return labels.slice(0, 4).join(", ")
+}
+
+const WANTED_FORMS = new Set(["10-K", "10-Q", "8-K", "20-F", "40-F", "6-K", "10-K/A", "10-Q/A", "8-K/A"])
+
+type FilingColumns = {
+  form?: string[]
+  filingDate?: string[]
+  accessionNumber?: string[]
+  primaryDocument?: string[]
+  reportDate?: string[]
+  items?: string[]
+}
+
+function filingsFromColumns(cik: string, columns: FilingColumns): Filing[] {
+  const forms = columns.form ?? []
+  const rows: Filing[] = []
+  for (let i = 0; i < forms.length; i++) {
+    if (!WANTED_FORMS.has(forms[i])) continue
+    const accession = (columns.accessionNumber?.[i] ?? "").replace(/-/g, "")
+    if (!accession) continue
+    rows.push({
+      form: forms[i],
+      date: columns.filingDate?.[i] ?? "",
+      reportDate: columns.reportDate?.[i] ?? "",
+      items: forms[i].startsWith("8-K") ? itemLabel(columns.items?.[i] ?? "") : "",
+      url: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accession}/${columns.primaryDocument?.[i] ?? ""}`,
+    })
+  }
+  return rows
+}
+
+async function olderFilings(cik: string, names: string[]) {
+  const pages = await Promise.all(
+    names.map(async (name) => {
+      try {
+        const response = await fetch(`https://data.sec.gov/submissions/${name}`, {
+          headers: { "User-Agent": UA, Accept: "application/json" },
+          signal: AbortSignal.timeout(20000),
+        })
+        if (!response.ok) return [] as Filing[]
+        return filingsFromColumns(cik, (await response.json()) as FilingColumns)
+      } catch {
+        return [] as Filing[]
+      }
+    }),
+  )
+  return pages.flat()
+}
+
+async function newsHistory(name: string, full: boolean) {
+  const current = await rss(`"${name}" (investor relations OR "press release" OR earnings OR newsroom)`, 100)
+  if (!full) return current
+  const year = new Date().getFullYear()
+  const years: number[] = []
+  for (let cursor = year; cursor >= year - 10; cursor--) years.push(cursor)
+  const older: Headline[] = []
+  for (let i = 0; i < years.length; i += 5) {
+    const chunk = years.slice(i, i + 4)
+    const parts = await Promise.all(
+      chunk.map((value) => rss(`"${name}" after:${value}-01-01 before:${value + 1}-01-01`, 80)),
+    )
+    for (const part of parts) older.push(...part)
+  }
+  return [...current, ...older]
 }
 
 type XbrlPoint = { end?: string; val?: number; form?: string; filed?: string; fp?: string; frame?: string; fy?: number }
@@ -299,10 +378,8 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
     name: String(data?.name ?? "").slice(0, 140),
   }))
   .handler(async ({ data }): Promise<CompanyBrief> => {
-    const headlines = await headlinesFor(data.ticker, data.name).catch(() => [] as Headline[])
     const map = await loadTickers().catch(() => new Map<string, string>())
     const cik = map.get(data.ticker) ?? null
-    let filings: Filing[] = []
     let facts: FactLine[] = []
     let exchanges: string[] = []
     let address = ""
@@ -328,50 +405,34 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       }
       if (response.ok) {
         const sub = (await response.json()) as {
-          name?: string
-          tickers?: string[]
           exchanges?: string[]
           addresses?: { business?: Record<string, string> }
-          filings?: {
-            recent?: {
-              form?: string[]
-              filingDate?: string[]
-              accessionNumber?: string[]
-              primaryDocument?: string[]
-              reportDate?: string[]
-              items?: string[]
-            }
-          }
+          filings?: { recent?: FilingColumns; files?: { name: string }[] }
         }
         exchanges = sub.exchanges ?? []
         address = addressOf(sub.addresses?.business)
         canadian = /canada/i.test(address)
-        const recent = sub.filings?.recent
-        const forms = recent?.form ?? []
-        const dates = recent?.filingDate ?? []
-        const accessions = recent?.accessionNumber ?? []
-        const docs = recent?.primaryDocument ?? []
-        const reports = recent?.reportDate ?? []
-        const itemCodes = recent?.items ?? []
-        const wanted = new Set(["10-K", "10-Q", "8-K", "20-F", "40-F", "6-K"])
-        for (let i = 0; i < forms.length && filings.length < 8; i++) {
-          if (!wanted.has(forms[i])) continue
-          const acc = (accessions[i] ?? "").replace(/-/g, "")
-          filings.push({
-            form: forms[i],
-            date: dates[i] ?? "",
-            reportDate: reports[i] ?? "",
-            items: forms[i] === "8-K" ? itemLabel(itemCodes[i] ?? "") : "",
-            url: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${acc}/${docs[i] ?? ""}`,
-          })
-          if (!latestAnnual && (forms[i] === "10-K" || forms[i] === "20-F" || forms[i] === "40-F")) {
-            latestAnnual = `${forms[i]} filed ${dates[i]}`
-          }
-        }
+        const recentRows = filingsFromColumns(cik, sub.filings?.recent ?? {})
+        const older = filingBackfillDone(data.ticker)
+          ? []
+          : await olderFilings(cik, (sub.filings?.files ?? []).map((file) => file.name))
+        saveFilings(data.ticker, [...recentRows, ...older])
+        if (!filingBackfillDone(data.ticker)) markFilingBackfill(data.ticker)
+        const annual = recentFilings(data.ticker, 40).find(
+          (row) => row.form === "10-K" || row.form === "20-F" || row.form === "40-F",
+        )
+        latestAnnual = annual ? `${annual.form} filed ${annual.date}` : null
         entity = canadian ? "Canada-linked SEC filer — SEDAR+ still required" : "US-listed SEC registrant"
       }
     }
 
+    const freshNews = await newsHistory(data.name, !newsBackfillDone(data.ticker)).catch(() => [] as Headline[])
+    if (freshNews.length > 0) saveHeadlines(data.ticker, freshNews)
+    if (!newsBackfillDone(data.ticker) && freshNews.length > 0) markNewsBackfill(data.ticker)
+    const headlines = recentHeadlines(data.ticker, 6)
+    const filings = recentFilings(data.ticker, 8)
+    const archive = archiveCounts(data.ticker)
+    const priorNote = latestNote(data.ticker)
     const newest = headlines[0]
     const rubric = [
       {
@@ -412,6 +473,8 @@ export const getCompanyBrief = createServerFn({ method: "POST" })
       filings,
       facts,
       headlines,
+      archive,
+      priorNote,
       rubric,
     }
   })

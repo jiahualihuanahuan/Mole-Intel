@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { createServerFn } from "@tanstack/react-start"
 import type { CompanyBrief } from "@/lib/intel.functions"
+import { saveNote } from "@/lib/store"
 
 export const DEFAULT_ENDPOINT = "http://192.168.86.35:11434/v1"
 export const DEFAULT_MODEL = "qwen3.5:9b"
@@ -281,6 +282,7 @@ async function writeNote(
 
 type NoteJob = {
   at: number
+  ticker: string
   status: "pending" | "done" | "error"
   review?: LocalReview
   error?: string
@@ -302,6 +304,11 @@ function finishJob(id: string, result: { ok: true; review: LocalReview } | { ok:
   if (result.ok) {
     current.status = "done"
     current.review = result.review
+    try {
+      saveNote(current.ticker, result.review)
+    } catch {
+      // The note still returns to the page if the archive is not writable.
+    }
     return
   }
   current.status = "error"
@@ -409,7 +416,7 @@ export const startLocalModel = createServerFn({ method: "POST" })
       jobs.delete(id)
     }
     const id = crypto.randomUUID()
-    const job: NoteJob = { at: Date.now(), status: "pending" }
+    const job: NoteJob = { at: Date.now(), ticker: data.brief.ticker, status: "pending" }
     jobs.set(id, job)
     spawnNote(id, data)
     return { ok: true as const, jobId: id }

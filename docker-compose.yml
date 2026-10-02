@@ -8,6 +8,9 @@ services:
       HOST: 0.0.0.0
       PORT: "8090"
       OLLAMA_BASE_URL: http://192.168.86.35:11434/v1
+      MOLE_DATA: /app/data
+    volumes:
+      - mole-data:/app/data
     restart: unless-stopped
     healthcheck:
       test:
@@ -20,4 +23,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 40s
+
+volumes:
+  mole-data:

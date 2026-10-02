@@ -10,6 +10,6 @@ Source judgment is written by Ollama at `http://192.168.86.35:11434/v1`, model `
 docker compose up --build
 ```
 
-Open `http://127.0.0.1:8090`. The desk uses port 8090 so it does not take the port your local model is already using.
+Open `http://127.0.0.1:8090`. The desk uses port 8090 so it does not take the port your local model is already using. Filings, news, and notes are kept in a Docker volume, so a rebuild does not wipe the archive.
 
 Universe: 101 Nasdaq-100 names, then S&P 500 names that are not already in the Nasdaq 100.

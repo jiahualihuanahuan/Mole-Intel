@@ -42,6 +42,7 @@ function Home() {
   const [settingsReady, setSettingsReady] = useState(false)
   const [armed, setArmed] = useState(false)
   const [review, setReview] = useState<LocalReview | null>(null)
+  const [savedAt, setSavedAt] = useState("")
   const [reviewState, setReviewState] = useState<"idle" | "loading" | "error">("idle")
   const [reviewError, setReviewError] = useState("")
   const checked = useRef(new Set<string>())
@@ -138,6 +139,19 @@ function Home() {
         if (!cancelled) {
           setBrief(value)
           setBriefState("idle")
+          if (value.priorNote) {
+            setReview({
+              digest: value.priorNote.digest,
+              thesis: value.priorNote.thesis,
+              analysis: value.priorNote.analysis,
+              risks: value.priorNote.risks,
+              gaps: value.priorNote.gaps,
+              model: value.priorNote.model,
+            })
+            setSavedAt(value.priorNote.createdAt)
+          } else {
+            setSavedAt("")
+          }
         }
       })
       .catch(() => {
@@ -176,6 +190,7 @@ function Home() {
         }
         if (value.pending) continue
         setReview(value.review)
+        setSavedAt("")
         setReviewState("idle")
         return
       }
@@ -341,6 +356,7 @@ function Home() {
                   </p>
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Latest IR or news</h3>
+                    <p className="mt-1 text-xs text-muted">{brief.archive.headlines} stored. Showing the latest.</p>
                     <ul className="mt-2 space-y-2">
                       {brief.headlines.length === 0 && (
                         <li className="text-sm text-muted">No wire came back for this name.</li>
@@ -360,7 +376,13 @@ function Home() {
                   </div>
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Buy-side note</h3>
-                    {reviewState === "loading" && (
+                    {reviewState === "loading" && review && (
+                      <p className="mt-2 text-sm text-muted">
+                        Updating the note. Showing the last one
+                        {savedAt ? ` from ${savedAt.slice(0, 16).replace("T", " ")}` : ""}.
+                      </p>
+                    )}
+                    {reviewState === "loading" && !review && (
                       <p className="mt-2 text-sm text-muted">qwen3.5 is working the name. This can take a few minutes.</p>
                     )}
                     {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
@@ -407,6 +429,7 @@ function Home() {
                   )}
                   <div>
                     <h3 className="text-xs tracking-wide text-muted">Recent filings</h3>
+                    <p className="mt-1 text-xs text-muted">{brief.archive.filings} stored. Showing the latest.</p>
                     <ul className="mt-2 space-y-1 text-sm">
                       {brief.filings.map((filing) => (
                         <li key={filing.url}>
