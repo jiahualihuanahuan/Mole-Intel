@@ -1,3 +1,6 @@
+import { spawn, type ChildProcess } from "node:child_process"
+import { existsSync } from "node:fs"
+import { join } from "node:path"
 import { createServerFn } from "@tanstack/react-start"
 import type { CompanyBrief } from "@/lib/intel.functions"
 
@@ -281,18 +284,76 @@ type NoteJob = {
   status: "pending" | "done" | "error"
   review?: LocalReview
   error?: string
-  controller: AbortController
+  child?: ChildProcess
 }
 
 const jobs = new Map<string, NoteJob>()
 
-function sweepJobs() {
-  const cutoff = Date.now() - 20 * 60 * 1000
-  for (const [id, job] of jobs) {
-    if (job.at >= cutoff) continue
-    job.controller.abort()
-    jobs.delete(id)
+function workerPath() {
+  const candidates = ["/app/ollama-note.mjs", join(process.cwd(), "scripts/ollama-note.mjs")]
+  const found = candidates.find((path) => existsSync(path))
+  if (!found) throw new Error("The model worker is not in the image.")
+  return found
+}
+
+function finishJob(id: string, result: { ok: true; review: LocalReview } | { ok: false; error: string }) {
+  const current = jobs.get(id)
+  if (!current || current.status !== "pending") return
+  if (result.ok) {
+    current.status = "done"
+    current.review = result.review
+    return
   }
+  current.status = "error"
+  current.error = result.error
+}
+
+function spawnNote(
+  id: string,
+  data: {
+    endpoint: string
+    model: string
+    brief: {
+      name: string
+      ticker: string
+      entity: string
+      filings: { form: string; date: string }[]
+      headlines: { kind: string; title: string; source: string; published: string }[]
+    }
+  },
+) {
+  const job = jobs.get(id)
+  if (!job) return
+  const packet = {
+    company: data.brief.name,
+    ticker: data.brief.ticker,
+    entity: data.brief.entity,
+    filings: data.brief.filings.map((item) => `${item.form} ${item.date}`),
+    headlines: data.brief.headlines,
+  }
+  let child: ChildProcess
+  try {
+    child = spawn(process.execPath, [workerPath()], { stdio: ["pipe", "pipe", "pipe"] })
+  } catch (error) {
+    finishJob(id, { ok: false, error: error instanceof Error ? error.message : "Could not start the model worker." })
+    return
+  }
+  job.child = child
+  let out = ""
+  const timer = setTimeout(() => child.kill("SIGTERM"), 12 * 60 * 1000)
+  child.stdout?.setEncoding("utf8")
+  child.stdout?.on("data", (chunk: string) => {
+    out += chunk
+  })
+  child.on("close", () => {
+    clearTimeout(timer)
+    try {
+      finishJob(id, JSON.parse(out) as { ok: true; review: LocalReview } | { ok: false; error: string })
+    } catch {
+      finishJob(id, { ok: false, error: "The model worker stopped before it wrote a note." })
+    }
+  })
+  child.stdin?.end(JSON.stringify({ endpoint: data.endpoint, model: data.model, packet }))
 }
 
 function noteInput(data: {
@@ -325,32 +386,16 @@ function noteInput(data: {
 export const startLocalModel = createServerFn({ method: "POST" })
   .validator(noteInput)
   .handler(({ data }) => {
-    sweepJobs()
+    const cutoff = Date.now() - 20 * 60 * 1000
+    for (const [id, job] of jobs) {
+      if (job.at >= cutoff) continue
+      job.child?.kill("SIGTERM")
+      jobs.delete(id)
+    }
     const id = crypto.randomUUID()
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 12 * 60 * 1000)
-    const job: NoteJob = { at: Date.now(), status: "pending", controller }
+    const job: NoteJob = { at: Date.now(), status: "pending" }
     jobs.set(id, job)
-    void writeNote(data, controller.signal)
-      .then((result) => {
-        clearTimeout(timer)
-        const current = jobs.get(id)
-        if (!current || current.status !== "pending") return
-        if (result.ok) {
-          current.status = "done"
-          current.review = result.review
-          return
-        }
-        current.status = "error"
-        current.error = result.error
-      })
-      .catch((error: unknown) => {
-        clearTimeout(timer)
-        const current = jobs.get(id)
-        if (!current || current.status !== "pending") return
-        current.status = "error"
-        current.error = error instanceof Error ? error.message : "The model did not finish"
-      })
+    spawnNote(id, data)
     return { ok: true as const, jobId: id }
   })
 
@@ -362,7 +407,6 @@ export const pollLocalModel = createServerFn({ method: "POST" })
     const job = jobs.get(data.jobId)
     if (!job) return { ok: false as const, error: "That note expired. Open the company again." }
     if (job.status === "pending") return { ok: true as const, pending: true as const }
-    jobs.delete(data.jobId)
     if (job.status === "error" || !job.review) {
       return { ok: false as const, error: job.error || "The model did not finish" }
     }
@@ -375,7 +419,7 @@ export const cancelLocalModel = createServerFn({ method: "POST" })
   }))
   .handler(({ data }) => {
     const job = jobs.get(data.jobId)
-    job?.controller.abort()
+    job?.child?.kill("SIGTERM")
     jobs.delete(data.jobId)
     return { ok: true as const }
   })

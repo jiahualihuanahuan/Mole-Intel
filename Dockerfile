@@ -14,5 +14,6 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=8090
 COPY --from=build /app/.output ./.output
+COPY --from=build /app/scripts/ollama-note.mjs ./ollama-note.mjs
 EXPOSE 8090
 CMD ["node", ".output/server/index.mjs"]

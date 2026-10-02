@@ -9,6 +9,21 @@ export const Route = createFileRoute("/")({ component: Home })
 
 type Filter = "all" | "ndx" | "spx"
 
+async function reachDesk<T>(run: () => Promise<T>) {
+  let last = "Failed to fetch"
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      return await run()
+    } catch (error) {
+      last = error instanceof Error ? error.message : last
+      const dropped = /failed to fetch|networkerror|load failed/i.test(last)
+      if (!dropped || attempt === 5) break
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+    }
+  }
+  throw new Error(last === "Failed to fetch" ? "The page lost the desk for a moment. Open the company again." : last)
+}
+
 function Home() {
   const fetchNews = useServerFn(getNewsBatch)
   const fetchBrief = useServerFn(getCompanyBrief)
@@ -141,7 +156,7 @@ function Home() {
     setReviewState("loading")
     setReviewError("")
     const tick = async () => {
-      const started = await startReview({ data: { endpoint, model: modelName, brief } })
+      const started = await reachDesk(() => startReview({ data: { endpoint, model: modelName, brief } }))
       if (cancelled) {
         void cancelReview({ data: { jobId: started.jobId } })
         return
@@ -152,7 +167,7 @@ function Home() {
           timer = window.setTimeout(resolve, 2000)
         })
         if (cancelled) return
-        const value = await pollReview({ data: { jobId: job.id } })
+        const value = await reachDesk(() => pollReview({ data: { jobId: job.id } }))
         if (cancelled) return
         if (!value.ok) {
           setReviewState("error")
