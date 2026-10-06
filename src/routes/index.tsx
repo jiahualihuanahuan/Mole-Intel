@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { universe, type UniverseRow } from "@/data/universe";
 import { listArchiveFn, loadArchiveFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
 import type { DebateResult, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
@@ -72,6 +72,7 @@ function Home() {
   const [deskError, setDeskError] = useState("");
   const [saved, setSaved] = useState<Listed[]>([]);
   const [fromArchive, setFromArchive] = useState(false);
+  const request = useRef(0);
 
   function showList(hits: { ticker: string; call: string }[]) {
     const fromFile: Listed[] = hits.map((hit) => {
@@ -116,6 +117,7 @@ function Home() {
   }
 
   function openCompany(row: UniverseRow) {
+    const ticket = ++request.current;
     setSelected(row);
     setQuery("");
     setSearchOpen(false);
@@ -126,16 +128,27 @@ function Home() {
     setTapeState("loading");
     loadArchive({ data: { ticker: row.ticker } })
       .then((value) => {
-        if (!value) return;
-        setDebate((current) => (current?.source === "desk" && current.ticker === row.ticker ? current : value));
+        if (ticket !== request.current) return;
+        if (value) {
+          setDebate((current) => (current?.source === "desk" && current.ticker === row.ticker ? current : value));
+          return;
+        }
+        void startDesk(row.ticker, ticket);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (ticket !== request.current) return;
+        void startDesk(row.ticker, ticket);
+      });
     readTape({ data: { ticker: row.ticker } })
       .then((value) => {
+        if (ticket !== request.current) return;
         setTape(value);
         setTapeState("idle");
       })
-      .catch(() => setTapeState("error"));
+      .catch(() => {
+        if (ticket !== request.current) return;
+        setTapeState("error");
+      });
   }
 
   function openRaw(ticker: string) {
@@ -143,18 +156,21 @@ function Home() {
     openCompany(known ?? { ticker, name: ticker, sector: "Unlisted", index: "Tape" });
   }
 
-  async function startDesk() {
-    if (!selected || deskState === "loading") return;
+  async function startDesk(ticker?: string, ticket = request.current) {
+    const symbol = ticker ?? selected?.ticker;
+    if (!symbol) return;
     setDeskState("loading");
     setDeskError("");
     try {
-      const value = await runDebate({ data: { ticker: selected.ticker } });
+      const value = await runDebate({ data: { ticker: symbol } });
+      if (ticket !== request.current) return;
       setDebate(value);
-      setTape(value.tape);
+      if (value.tape.price != null) setTape(value.tape);
       remember(value);
       setDeskState(value.judge ? "idle" : "error");
       if (!value.judge) setDeskError(value.errors[0] || "The judge did not write a note.");
     } catch (error) {
+      if (ticket !== request.current) return;
       setDeskState("error");
       setDeskError(error instanceof Error ? error.message : "The desk did not answer.");
     }
@@ -334,16 +350,16 @@ function Company({
           disabled={deskState === "loading"}
           className="min-h-11 rounded-card bg-ink px-4 text-sm text-surface disabled:opacity-60"
         >
-          {deskState === "loading" ? "The desk is sitting…" : debate?.source === "archive" ? "Run it again on the 3080" : debate ? "Sit the desk again" : "Sit the desk"}
+          {deskState === "loading" ? "The desk is sitting…" : debate ? "Run it again on the 3080" : "Sit the desk"}
         </button>
         <p className="text-xs text-muted">
           {debate?.source === "archive"
             ? `Already in the archive${debate.asOf ? `, ${debate.asOf.slice(0, 16).replace("T", " ")} UTC` : ""}.`
-            : "One pass on the 3080. About a minute."}
+            : "A ticker with no note runs as soon as you open it."}
         </p>
       </div>
       {deskState === "loading" && (
-        <p className="mt-4 text-sm text-muted">Bull, bear, valuation, macro, earnings, and analysts are reading. The judge goes last.</p>
+        <p className="mt-4 text-sm text-muted">Reading the tape, the wires, and the filings. Six seats, then the judge. A first pass takes a few minutes.</p>
       )}
       {deskError && <p className="mt-4 text-sm text-accent">{deskError}</p>}
 
