@@ -170,9 +170,7 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            // Vercel stays the default so the hosted desk is unchanged.
-            // `docker compose` sets MOLE_PRESET=node and gets a Node server.
-            preset: process.env.MOLE_PRESET === "node" ? "node-server" : "vercel",
+            preset: "vercel",
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.

@@ -1,457 +1,418 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { useServerFn } from "@tanstack/react-start"
-import { useEffect, useMemo, useState } from "react"
-import { universe, type UniverseRow } from "@/data/universe"
-import { getCompanyBrief, type CompanyBrief } from "@/lib/intel.functions"
-import { cancelLocalModel, DEFAULT_ENDPOINT, DEFAULT_MODEL, pollLocalModel, startLocalModel, type LocalReview } from "@/lib/local-llm"
+import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useMemo, useState } from "react";
+import { universe, type UniverseRow } from "@/data/universe";
+import { readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import type { DebateResult, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 
-export const Route = createFileRoute("/")({ component: Home })
+export const Route = createFileRoute("/")({ component: Home });
 
-async function reachDesk<T>(run: () => Promise<T>) {
-  let last = "Failed to fetch"
-  for (let attempt = 0; attempt < 6; attempt++) {
-    try {
-      return await run()
-    } catch (error) {
-      last = error instanceof Error ? error.message : last
-      const dropped = /failed to fetch|networkerror|load failed/i.test(last)
-      if (!dropped || attempt === 5) break
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-    }
+const STORE = "mole-intel-debates";
+const SEAT_ORDER = ["bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+
+function money(value: number | null): string {
+  if (value == null) return "—";
+  return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function pct(value: number | null): string {
+  if (value == null) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function toneClass(value: number | null): string {
+  if (value == null) return "text-muted";
+  if (value > 0.05) return "text-pine";
+  if (value < -0.05) return "text-accent";
+  return "text-ink";
+}
+
+function loadSaved(): DebateResult[] {
+  try {
+    const raw = localStorage.getItem(STORE);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as DebateResult[];
+    return Array.isArray(parsed) ? parsed.slice(0, 12) : [];
+  } catch {
+    return [];
   }
-  throw new Error(last === "Failed to fetch" ? "The page lost the desk for a moment. Open the company again." : last)
 }
 
 function Home() {
-  const fetchBrief = useServerFn(getCompanyBrief)
-  const startReview = useServerFn(startLocalModel)
-  const pollReview = useServerFn(pollLocalModel)
-  const cancelReview = useServerFn(cancelLocalModel)
-  const [query, setQuery] = useState("")
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsError, setSettingsError] = useState("")
-  const [selected, setSelected] = useState<UniverseRow | null>(null)
-  const [brief, setBrief] = useState<CompanyBrief | null>(null)
-  const [briefState, setBriefState] = useState<"idle" | "loading" | "error">("idle")
-  const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
-  const [modelName, setModelName] = useState(DEFAULT_MODEL)
-  const [settingsReady, setSettingsReady] = useState(false)
-  const [armed, setArmed] = useState(false)
-  const [review, setReview] = useState<LocalReview | null>(null)
-  const [savedAt, setSavedAt] = useState("")
-  const [reviewState, setReviewState] = useState<"idle" | "loading" | "error">("idle")
-  const [reviewError, setReviewError] = useState("")
+  const readTape = useServerFn(readTapeFn);
+  const runDebate = useServerFn(runDebateFn);
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selected, setSelected] = useState<UniverseRow | null>(null);
+  const [tape, setTape] = useState<Tape | null>(null);
+  const [tapeState, setTapeState] = useState<"idle" | "loading" | "error">("idle");
+  const [debate, setDebate] = useState<DebateResult | null>(null);
+  const [deskState, setDeskState] = useState<"idle" | "loading" | "error">("idle");
+  const [deskError, setDeskError] = useState("");
+  const [saved, setSaved] = useState<DebateResult[]>([]);
+
+  useEffect(() => {
+    setSaved(loadSaved());
+  }, []);
 
   const matches = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
     return universe
       .filter((row) => row.ticker.toLowerCase().includes(q) || row.name.toLowerCase().includes(q))
-      .slice(0, 8)
-  }, [query])
+      .slice(0, 8);
+  }, [query]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("mole-intel-llm")
-    let nextEndpoint = DEFAULT_ENDPOINT
-    let nextModel = DEFAULT_MODEL
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as { endpoint?: string; model?: string }
-        const stale =
-          !parsed.endpoint ||
-          parsed.endpoint === "http://127.0.0.1:8080/v1" ||
-          parsed.endpoint === "http://127.0.0.1:11434/v1"
-        if (!stale && parsed.endpoint) nextEndpoint = parsed.endpoint
-        if (parsed.model && parsed.model !== "local") nextModel = parsed.model
-      } catch {
-        localStorage.removeItem("mole-intel-llm")
-      }
-    }
-    setEndpoint(nextEndpoint)
-    setModelName(nextModel)
-    localStorage.setItem("mole-intel-llm", JSON.stringify({ endpoint: nextEndpoint, model: nextModel }))
-    setArmed(true)
-    setSettingsReady(true)
-  }, [])
-
-  useEffect(() => {
-    if (!selected) return
-    let cancelled = false
-    setBriefState("loading")
-    setBrief(null)
-    setReview(null)
-    setReviewState("idle")
-    setReviewError("")
-    fetchBrief({ data: { ticker: selected.ticker, name: selected.name } })
-      .then((value) => {
-        if (!cancelled) {
-          setBrief(value)
-          setBriefState("idle")
-          if (value.priorNote) {
-            setReview({
-              digest: value.priorNote.digest,
-              thesis: value.priorNote.thesis,
-              analysis: value.priorNote.analysis,
-              risks: value.priorNote.risks,
-              gaps: value.priorNote.gaps,
-              model: value.priorNote.model,
-            })
-            setSavedAt(value.priorNote.createdAt)
-          } else {
-            setSavedAt("")
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setBriefState("error")
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [selected, fetchBrief])
-
-  useEffect(() => {
-    if (!settingsReady || !armed || !brief) return
-    let cancelled = false
-    let timer = 0
-    const job = { id: "" }
-    setReviewState("loading")
-    setReviewError("")
-    const tick = async () => {
-      const started = await reachDesk(() => startReview({ data: { endpoint, model: modelName, brief } }))
-      if (cancelled) {
-        void cancelReview({ data: { jobId: started.jobId } })
-        return
-      }
-      job.id = started.jobId
-      while (!cancelled) {
-        await new Promise((resolve) => {
-          timer = window.setTimeout(resolve, 2000)
-        })
-        if (cancelled) return
-        const value = await reachDesk(() => pollReview({ data: { jobId: job.id } }))
-        if (cancelled) return
-        if (!value.ok) {
-          setReviewState("error")
-          setReviewError(value.error)
-          return
-        }
-        if (value.pending) continue
-        setReview(value.review)
-        setSavedAt("")
-        setReviewState("idle")
-        return
-      }
-    }
-    tick().catch((error: unknown) => {
-      if (cancelled) return
-      setReviewState("error")
-      setReviewError(error instanceof Error ? error.message : "The local model did not answer")
-    })
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-      if (job.id) void cancelReview({ data: { jobId: job.id } })
-    }
-  }, [armed, brief, cancelReview, endpoint, modelName, pollReview, settingsReady, startReview])
-
-  function saveModel() {
-    const next = endpoint.trim()
-    if (!/^https?:\/\//i.test(next)) {
-      setSettingsError("The address must start with http:// or https://")
-      return
-    }
-    localStorage.setItem("mole-intel-llm", JSON.stringify({ endpoint: next, model: modelName.trim() }))
-    setEndpoint(next)
-    setSettingsError("")
-    setSettingsOpen(false)
-    setArmed(true)
+  function remember(next: DebateResult) {
+    const list = [next, ...loadSaved().filter((row) => row.ticker !== next.ticker)].slice(0, 12);
+    localStorage.setItem(STORE, JSON.stringify(list));
+    setSaved(list);
   }
 
+  function openCompany(row: UniverseRow) {
+    setSelected(row);
+    setQuery("");
+    setSearchOpen(false);
+    setTape(null);
+    setDebate(loadSaved().find((item) => item.ticker === row.ticker) ?? null);
+    setDeskState("idle");
+    setDeskError("");
+    setTapeState("loading");
+    readTape({ data: { ticker: row.ticker } })
+      .then((value) => {
+        setTape(value);
+        setTapeState("idle");
+      })
+      .catch(() => setTapeState("error"));
+  }
+
+  function openRaw(ticker: string) {
+    const known = universe.find((row) => row.ticker === ticker);
+    openCompany(known ?? { ticker, name: ticker, sector: "Unlisted", index: "Tape" });
+  }
+
+  async function startDesk() {
+    if (!selected || deskState === "loading") return;
+    setDeskState("loading");
+    setDeskError("");
+    try {
+      const value = await runDebate({ data: { ticker: selected.ticker } });
+      setDebate(value);
+      setTape(value.tape);
+      remember(value);
+      setDeskState(value.judge ? "idle" : "error");
+      if (!value.judge) setDeskError(value.errors[0] || "The judge did not write a note.");
+    } catch (error) {
+      setDeskState("error");
+      setDeskError(error instanceof Error ? error.message : "The desk did not answer.");
+    }
+  }
+
+  const rawTicker = query.trim().toUpperCase();
+  const showRaw = /^[A-Z.]{1,8}$/.test(rawTicker) && !matches.some((row) => row.ticker === rawTicker);
+
   return (
-    <main className="min-h-screen">
-      <header className="flex items-center gap-2 border-b border-line px-4 py-3 sm:px-6">
-        <div className="relative flex-1">
-          <input
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value)
-              setSearchOpen(true)
-            }}
-            onFocus={() => setSearchOpen(true)}
-            onBlur={() => setSearchOpen(false)}
-            placeholder="Ticker or company"
-            aria-label="Ticker or company"
-            className="min-h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm"
-          />
-          {searchOpen && query.trim() && (
-            <ul className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-xl border border-line bg-surface">
-              {matches.length === 0 && <li className="px-3 py-2 text-sm text-muted">No company</li>}
-              {matches.map((row) => (
-                <li key={row.ticker}>
-                  <button
-                    type="button"
-                    onMouseDown={(event) => {
-                      event.preventDefault()
-                      setSelected(row)
-                      setQuery("")
-                      setSearchOpen(false)
-                    }}
-                    className="flex w-full items-baseline gap-2 px-3 py-2 text-left hover:bg-chip"
-                  >
-                    <span className="font-medium">{row.ticker}</span>
-                    <span className="text-sm text-muted">{row.name}</span>
-                    <span className="ml-auto text-xs text-muted">{row.index}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="min-h-11 rounded-xl border border-line bg-surface px-3 text-sm"
-        >
-          Settings
-        </button>
-      </header>
-      {settingsOpen && (
-        <div
-          className="fixed inset-0 z-20 flex items-start justify-center bg-ink/40 px-4 pt-20"
-          onClick={() => setSettingsOpen(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-line bg-surface p-4"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-medium">Settings</h2>
-              <button type="button" onClick={() => setSettingsOpen(false)} className="text-sm text-muted">
-                Close
-              </button>
-            </div>
-            <label className="mt-4 block text-xs text-muted" htmlFor="llm-endpoint">
-              Model address
-            </label>
+    <main className="min-h-screen bg-bg text-ink">
+      <header className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 py-3 backdrop-blur sm:px-8">
+        <div className="mx-auto flex max-w-5xl items-center gap-3">
+          <p className="hidden font-display text-xl sm:block">Mole Intel</p>
+          <div className="relative min-w-0 flex-1">
             <input
-              id="llm-endpoint"
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              className="mt-1 min-h-11 w-full rounded-xl border border-line bg-bg px-3 text-sm"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onBlur={() => window.setTimeout(() => setSearchOpen(false), 200)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && matches[0]) openCompany(matches[0]);
+                else if (event.key === "Enter" && showRaw) openRaw(rawTicker);
+              }}
+              placeholder="Ticker or company"
+              aria-label="Ticker or company"
+              className="min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm outline-none"
             />
-            <label className="mt-3 block text-xs text-muted" htmlFor="llm-model">
-              Model name
-            </label>
-            <input
-              id="llm-model"
-              value={modelName}
-              onChange={(event) => setModelName(event.target.value)}
-              className="mt-1 min-h-11 w-full rounded-xl border border-line bg-bg px-3 text-sm"
-            />
-            {settingsError && <p className="mt-3 text-sm text-accent">{settingsError}</p>}
-            <button type="button" onClick={saveModel} className="mt-4 min-h-11 rounded-xl bg-ink px-3 text-sm text-surface">
-              Save
-            </button>
+            {searchOpen && query.trim() && (
+              <ul className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-card border border-line bg-surface shadow-sm">
+                {matches.length === 0 && !showRaw && (
+                  <li className="px-3 py-3 text-sm text-muted">No company in the desk list.</li>
+                )}
+                {matches.map((row) => (
+                  <li key={row.ticker}>
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        openCompany(row);
+                      }}
+                      className="flex min-h-11 w-full items-baseline gap-2 px-3 text-left hover:bg-chip"
+                    >
+                      <span className="font-medium">{row.ticker}</span>
+                      <span className="truncate text-sm text-muted">{row.name}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted">{row.index}</span>
+                    </button>
+                  </li>
+                ))}
+                {showRaw && (
+                  <li>
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        openRaw(rawTicker);
+                      }}
+                      className="flex min-h-11 w-full items-baseline gap-2 px-3 text-left hover:bg-chip"
+                    >
+                      <span className="font-medium">{rawTicker}</span>
+                      <span className="text-sm text-muted">Open this ticker</span>
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
           </div>
         </div>
-      )}
-      <div>
-        <section className="px-4 py-6 sm:px-8">
-          {!selected && <p className="text-sm text-muted">Search for a company.</p>}
-          {selected && (
-            <div>
-              <p className="text-xs tracking-wide text-muted">{selected.index}</p>
-              <h1 className="font-display text-4xl">{selected.name}</h1>
-              <p className="text-sm text-muted">
-                {selected.ticker} · {selected.sector}
-              </p>
-              {briefState === "loading" && <p className="mt-6 text-sm text-muted">Reading filings and wires…</p>}
-              {briefState === "error" && (
-                <p className="mt-6 text-sm text-accent">Could not load this company. Try another ticker.</p>
-              )}
-              {brief && (
-                <div className="mt-6 max-w-3xl space-y-6">
-                  <p className="text-sm leading-relaxed">{brief.entity}</p>
-                  <p className="text-sm text-muted">
-                    {brief.exchanges.join(", ") || "Exchange not on the SEC profile"}
-                    {brief.profile.sic ? ` · ${brief.profile.sic}` : ""}
-                    {brief.address ? ` · ${brief.address}` : ""}
-                    {brief.cik ? ` · CIK ${brief.cik}` : ""}
-                    {brief.profile.founded ? ` · founded ${brief.profile.founded}` : ""}
-                    {brief.profile.employees ? ` · about ${brief.profile.employees} employees` : ""}
-                  </p>
-                  {(brief.profile.summary || brief.profile.website || brief.profile.pages.length > 0) && (
-                    <div>
-                      <h2 className="text-xs tracking-wide text-muted">What the company says</h2>
-                      {brief.profile.website && (
-                        <a href={brief.profile.website} target="_blank" rel="noreferrer" className="mt-1 block text-sm text-pine underline">
-                          {brief.profile.website}
-                        </a>
-                      )}
-                      {brief.profile.summary && <p className="mt-2 text-sm leading-relaxed">{brief.profile.summary}</p>}
-                      {brief.profile.pages.map((page) => (
-                        <p key={page.url} className="mt-2 text-sm leading-relaxed">
-                          <a href={page.url} target="_blank" rel="noreferrer" className="font-medium text-pine underline">
-                            {page.label}
-                          </a>
-                          <span className="text-muted"> {page.text}</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                  {brief.profile.peers.length > 0 && (
-                    <p className="text-sm text-muted">Same sector in the universe: {brief.profile.peers.join(", ")}</p>
-                  )}
-                  {brief.profile.links.length > 0 && (
-                    <div>
-                      <h2 className="text-xs tracking-wide text-muted">Channels not read here</h2>
-                      <p className="mt-1 text-xs text-muted">
-                        Social, reviews, and private-company databases stay behind their own login. These open the public page.
-                      </p>
-                      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                        {brief.profile.links.map((link) => (
-                          <li key={link.label}>
-                            <a href={link.url} target="_blank" rel="noreferrer" className="text-sm text-pine underline">
-                              {link.label}
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <div>
-                    <h2 className="text-xs tracking-wide text-muted">Open roles</h2>
-                    <p className="mt-1 text-xs text-muted">
-                      {brief.profile.jobTotal || brief.profile.jobs.length} English postings
-                      {brief.profile.jobSource ? ` From ${brief.profile.jobSource}.` : ""} The note uses them only if they confirm or contradict the news.
-                      {brief.profile.jobs.length > 12 ? " Showing 12." : ""}
-                    </p>
-                    {brief.profile.jobs.length === 0 && (
-                      <p className="mt-2 text-sm text-muted">No public job list came back for this name.</p>
-                    )}
-                    <ul className="mt-2 space-y-2">
-                      {brief.profile.jobs.slice(0, 12).map((job) => (
-                        <li key={job.url || job.title} className="text-sm">
-                          {job.url ? (
-                            <a href={job.url} target="_blank" rel="noreferrer" className="text-pine underline">
-                              {job.title}
-                            </a>
-                          ) : (
-                            <span>{job.title}</span>
-                          )}
-                          <span className="mt-1 block text-xs text-muted">
-                            {[job.team, job.location, job.posted].filter(Boolean).join(" · ")}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    {brief.profile.careersUrl && (
-                      <a href={brief.profile.careersUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-pine underline">
-                        Careers page
-                      </a>
-                    )}
-                  </div>
-                  <div>
-                    <h2 className="text-xs tracking-wide text-muted">Company read</h2>
-                    <p className="mt-1 text-xs text-muted">A short read of where the company stands, from the news.</p>
-                    {reviewState === "loading" && review && (
-                      <p className="mt-2 text-sm text-muted">
-                        Updating the note. Showing the last one
-                        {savedAt ? ` from ${savedAt.slice(0, 16).replace("T", " ")}` : ""}.
-                      </p>
-                    )}
-                    {reviewState === "loading" && !review && (
-                      <p className="mt-2 text-sm text-muted">qwen3.5 is working the name. This can take a few minutes.</p>
-                    )}
-                    {reviewState === "error" && <p className="mt-2 text-sm text-accent">{reviewError}</p>}
-                    {review && (
-                      <div className="mt-2 space-y-3">
-                        {review.digest && (
-                          <p className="text-sm leading-relaxed">
-                            <span className="font-medium">The news. </span>
-                            {review.digest}
-                          </p>
-                        )}
-                        {review.thesis && <p className="text-sm leading-relaxed font-medium">{review.thesis}</p>}
-                        {review.analysis.split(/\n+/).filter(Boolean).map((paragraph) => (
-                          <p key={paragraph.slice(0, 40)} className="text-sm leading-relaxed">
-                            {paragraph}
-                          </p>
-                        ))}
-                        {review.risks && (
-                          <p className="text-sm leading-relaxed">
-                            <span className="font-medium">Do not take this at face value. </span>
-                            {review.risks}
-                          </p>
-                        )}
-                        {review.gaps && <p className="text-sm leading-relaxed text-muted">{review.gaps}</p>}
-                        <p className="text-xs text-muted">Answered by {review.model}</p>
-                      </div>
-                    )}
-                  </div>
-                  {brief.facts.length > 0 && (
-                    <div>
-                      <h2 className="text-xs tracking-wide text-muted">Figures from EDGAR</h2>
-                      <ul className="mt-2 space-y-2">
-                        {brief.facts.map((fact) => (
-                          <li key={fact.label} className="text-sm">
-                            <span className="font-medium">
-                              {fact.label}
-                              <span className="font-normal text-muted"> · {fact.unit}</span>
-                            </span>
-                            <span className="mt-1 block text-muted">{fact.points.join(" · ")}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <div>
-                    <h2 className="text-xs tracking-wide text-muted">Latest IR or news</h2>
-                    <p className="mt-1 text-xs text-muted">{brief.archive.headlines} stored. Showing the latest.</p>
-                    <ul className="mt-2 space-y-2">
-                      {brief.headlines.length === 0 && (
-                        <li className="text-sm text-muted">No wire came back for this name.</li>
-                      )}
-                      {brief.headlines.map((item) => (
-                        <li key={item.link || item.title} className="text-sm">
-                          <a href={item.link} target="_blank" rel="noreferrer" className="text-pine underline">
-                            {item.title}
-                          </a>
-                          <span className="mt-1 block text-xs text-muted">
-                            {item.kind === "ir" ? "IR / wire" : "News"}
-                            {item.source ? ` · ${item.source}` : ""} {item.published}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h2 className="text-xs tracking-wide text-muted">Recent filings</h2>
-                    <p className="mt-1 text-xs text-muted">{brief.archive.filings} stored. Showing the latest.</p>
-                    <ul className="mt-2 space-y-1 text-sm">
-                      {brief.filings.map((filing) => (
-                        <li key={filing.url}>
-                          <a href={filing.url} target="_blank" rel="noreferrer" className="text-pine underline">
-                            {filing.form}
-                          </a>
-                          <span className="text-muted">
-                            {" "}
-                            · {filing.date}
-                            {filing.items ? ` · ${filing.items}` : ""}
-                          </span>
-                        </li>
-                      ))}
-                      {brief.filings.length === 0 && <li className="text-muted">No recent 10-K, 10-Q, or 8-K.</li>}
-                    </ul>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+      </header>
+
+      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-8">
+        {!selected && <Empty saved={saved} onOpen={openCompany} />}
+        {selected && (
+          <Company
+            company={selected}
+            tape={tape}
+            tapeState={tapeState}
+            debate={debate}
+            deskState={deskState}
+            deskError={deskError}
+            onRun={() => void startDesk()}
+          />
+        )}
       </div>
     </main>
-  )
+  );
+}
+
+function Empty({ saved, onOpen }: { saved: DebateResult[]; onOpen: (row: UniverseRow) => void }) {
+  return (
+    <section className="max-w-2xl pt-6">
+      <p className="text-xs tracking-wide text-muted">The desk</p>
+      <h1 className="font-display text-4xl leading-tight sm:text-5xl">Six seats. One judge. The split stays on the page.</h1>
+      <p className="mt-4 max-w-xl text-base text-muted">
+        Search a company. Bull, bear, valuation, macro, earnings, and analysts each read the same tape. The judge writes the call and lists what they still do not agree on.
+      </p>
+      {saved.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-xs tracking-wide text-muted">Saved on this browser</h2>
+          <ul className="mt-2 divide-y divide-line border-y border-line">
+            {saved.map((row) => (
+              <li key={row.ticker}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpen({
+                      ticker: row.ticker,
+                      name: row.name,
+                      sector: row.sector,
+                      index: row.indexName,
+                    })
+                  }
+                  className="flex min-h-11 w-full items-baseline gap-3 py-2 text-left"
+                >
+                  <span className="font-medium">{row.ticker}</span>
+                  <span className="truncate text-sm text-muted">{row.name}</span>
+                  <span className="ml-auto text-xs capitalize text-muted">{row.judge?.call ?? "unread"}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Company({
+  company,
+  tape,
+  tapeState,
+  debate,
+  deskState,
+  deskError,
+  onRun,
+}: {
+  company: UniverseRow;
+  tape: Tape | null;
+  tapeState: "idle" | "loading" | "error";
+  debate: DebateResult | null;
+  deskState: "idle" | "loading" | "error";
+  deskError: string;
+  onRun: () => void;
+}) {
+  const shown = debate?.tape ?? tape;
+  return (
+    <article>
+      <p className="text-xs tracking-wide text-muted">{company.index}</p>
+      <h1 className="font-display text-4xl sm:text-5xl">{company.name}</h1>
+      <p className="text-sm text-muted">
+        {company.ticker} · {company.sector}
+      </p>
+
+      <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
+        <Fact label="Last" value={shown ? money(shown.price) : "—"} hint={shown?.currency ?? ""} />
+        <Fact label="Day" value={shown ? pct(shown.changePct) : "—"} className={toneClass(shown?.changePct ?? null)} />
+        <Fact label="3 months" value={shown ? pct(shown.return3mPct) : "—"} className={toneClass(shown?.return3mPct ?? null)} />
+        <Fact label="Wires" value={shown ? String(shown.headlines.length) : "—"} hint="headlines" />
+      </dl>
+      {tapeState === "loading" && <p className="mt-3 text-sm text-muted">Reading the tape…</p>}
+      {tapeState === "error" && <p className="mt-3 text-sm text-accent">The tape did not load. The desk can still sit, but it will say the numbers are unknown.</p>}
+
+      <div className="mt-6 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={deskState === "loading"}
+          className="min-h-11 rounded-card bg-ink px-4 text-sm text-surface disabled:opacity-60"
+        >
+          {deskState === "loading" ? "The desk is sitting…" : debate ? "Sit the desk again" : "Sit the desk"}
+        </button>
+        <p className="text-xs text-muted">One pass. A full memo from each seat. About a minute.</p>
+      </div>
+      {deskState === "loading" && (
+        <p className="mt-4 text-sm text-muted">Bull, bear, valuation, macro, earnings, and analysts are reading. The judge goes last.</p>
+      )}
+      {deskError && <p className="mt-4 text-sm text-accent">{deskError}</p>}
+
+      {debate && <Desk debate={debate} />}
+    </article>
+  );
+}
+
+function Fact({ label, value, hint, className }: { label: string; value: string; hint?: string; className?: string }) {
+  return (
+    <div className="bg-surface px-3 py-3">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className={`mt-1 font-display text-2xl tabular-nums ${className ?? "text-ink"}`}>{value}</dd>
+      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
+    </div>
+  );
+}
+
+function Desk({ debate }: { debate: DebateResult }) {
+  return (
+    <div className="mt-8 space-y-8">
+      {debate.judge && <Judge note={debate.judge} model={debate.model} />}
+      <section>
+        <h2 className="text-xs tracking-wide text-muted">The seats</h2>
+        <div className="mt-3 space-y-3">
+          {SEAT_ORDER.map((key) => (
+            <Seat key={key} note={debate.seats[key] ?? null} fallback={key} />
+          ))}
+        </div>
+      </section>
+      {debate.tape.headlines.length > 0 && (
+        <section>
+          <h2 className="text-xs tracking-wide text-muted">Wires in the packet</h2>
+          <ul className="mt-2 space-y-2">
+            {debate.tape.headlines.map((headline) => (
+              <li key={headline} className="text-sm leading-relaxed">
+                {headline}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function Judge({ note, model }: { note: JudgeNote; model: string }) {
+  const callColor =
+    note.call === "bullish" ? "text-pine" : note.call === "bearish" ? "text-accent" : "text-ink";
+  return (
+    <section className="rounded-card border border-line bg-surface p-4 sm:p-6">
+      <p className="text-xs tracking-wide text-muted">Judge</p>
+      <p className={`mt-1 font-display text-3xl capitalize ${callColor}`}>{note.call}</p>
+      {note.conviction != null && (
+        <p className="text-sm tabular-nums text-muted">Conviction {Math.round(note.conviction * 100)}</p>
+      )}
+      {note.summary && <Prose text={note.summary} />}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <PointList title="For" items={note.bullPoints} />
+        <PointList title="Against" items={note.bearPoints} />
+      </div>
+      {note.disagreements.length > 0 && (
+        <div className="mt-5">
+          <h3 className="text-xs tracking-wide text-muted">Still open</h3>
+          <ul className="mt-2 space-y-3">
+            {note.disagreements.map((row) => (
+              <li key={row.topic} className="border-t border-line pt-3">
+                <p className="text-sm font-medium">{row.topic}</p>
+                {row.bull && <p className="mt-1 text-sm leading-relaxed"><span className="text-pine">Bull. </span>{row.bull}</p>}
+                {row.bear && <p className="mt-1 text-sm leading-relaxed"><span className="text-accent">Bear. </span>{row.bear}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {note.openQuestions.length > 0 && (
+        <ul className="mt-4 space-y-1">
+          {note.openQuestions.map((question) => (
+            <li key={question} className="text-sm text-muted">{question}</li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-4 text-xs text-muted">Answered by {model}</p>
+    </section>
+  );
+}
+
+function PointList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <h3 className="text-xs tracking-wide text-muted">{title}</h3>
+      <ul className="mt-1 space-y-1">
+        {items.map((item) => (
+          <li key={item} className="text-sm leading-relaxed">{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Seat({ note, fallback }: { note: SeatNote | null; fallback: string }) {
+  return (
+    <section className="rounded-card border border-line bg-surface p-4 sm:p-6">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="font-display text-2xl capitalize">{note?.title || fallback}</h3>
+        {note?.confidence != null && (
+          <p className="text-xs tabular-nums text-muted">Confidence {Math.round(note.confidence * 100)}</p>
+        )}
+      </div>
+      {!note && <p className="mt-2 text-sm text-muted">This seat did not write a note.</p>}
+      {note?.summary && <p className="mt-3 max-w-3xl text-sm font-medium leading-relaxed">{note.summary}</p>}
+      {note?.argument && <Prose text={note.argument} />}
+      {note && note.points.length > 0 && (
+        <ul className="mt-4 max-w-3xl space-y-2">
+          {note.points.map((point) => (
+            <li key={point} className="text-sm leading-relaxed text-muted">{point}</li>
+          ))}
+        </ul>
+      )}
+      {note?.verdict && <p className="mt-4 text-sm font-medium">{note.verdict}</p>}
+    </section>
+  );
+}
+
+function Prose({ text }: { text: string }) {
+  const paragraphs = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  return (
+    <div className="mt-3 max-w-3xl space-y-3">
+      {paragraphs.map((paragraph) => (
+        <p key={paragraph.slice(0, 48)} className="text-sm leading-relaxed">{paragraph}</p>
+      ))}
+    </div>
+  );
 }
