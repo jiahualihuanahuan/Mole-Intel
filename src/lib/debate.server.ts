@@ -1,7 +1,11 @@
 import { findCompany } from "@/data/universe";
+import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
 import type { DebateResult, Disagreement, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 
-const MODEL = "grok-4.5";
+const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
+const MODEL = process.env.LLM_MODEL || "qwen2.5-7b";
 
 const SEATS: { key: string; title: string; system: string }[] = [
   {
@@ -86,28 +90,32 @@ function extractJson(raw: string): Record<string, unknown> | null {
 }
 
 async function chat(system: string, user: string, maxTokens: number): Promise<string> {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey) throw new Error("The desk model is not available in this preview.");
-  const res = await fetch("https://api.x.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    signal: AbortSignal.timeout(90_000),
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0.2,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const key = process.env.LLM_API_KEY?.trim();
+  if (key) headers.Authorization = `Bearer ${key}`;
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers,
+      signal: AbortSignal.timeout(8 * 60 * 1000),
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "did not connect";
+    throw new Error(`vLLM at ${BASE_URL} did not answer (${MODEL}). ${detail}`);
+  }
   if (!res.ok) {
     const detail = (await res.text()).replace(/\s+/g, " ").slice(0, 180);
-    throw new Error(`The desk model returned ${res.status}. ${detail}`);
+    throw new Error(`vLLM at ${BASE_URL} returned ${res.status} for ${MODEL}. ${detail}`);
   }
   const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   return body.choices?.[0]?.message?.content ?? "";
@@ -258,6 +266,107 @@ async function readHeadlines(ticker: string): Promise<string[]> {
   }
 }
 
+export function archiveFile(): string {
+  const dir = process.env.MOLE_DATA || path.join(process.cwd(), "data");
+  return path.join(dir, "debates.jsonl");
+}
+
+function readArchiveRecords(): unknown[] {
+  let text = "";
+  try {
+    text = readFileSync(archiveFile(), "utf8");
+  } catch {
+    return [];
+  }
+  const records: unknown[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      records.push(JSON.parse(trimmed));
+    } catch {
+      // skip a torn line
+    }
+  }
+  return records;
+}
+
+export function listArchive(): ArchiveHit[] {
+  const latest = new Map<string, ArchiveHit>();
+  for (const record of readArchiveRecords()) {
+    const hit = hitFromRecord(record);
+    if (hit) latest.set(hit.ticker, hit);
+  }
+  return [...latest.values()].sort((a, b) => (a.asOf < b.asOf ? 1 : -1));
+}
+
+export function loadArchived(ticker: string): DebateResult | null {
+  const symbol = ticker.trim().toUpperCase();
+  let found: unknown = null;
+  for (const record of readArchiveRecords()) {
+    const hit = hitFromRecord(record);
+    if (hit?.ticker === symbol) found = record;
+  }
+  if (!found) return null;
+  const debate = debateFromRecord(found);
+  if (!debate) return null;
+  const known = findCompany(symbol);
+  debate.name = known?.name ?? symbol;
+  debate.sector = known?.sector ?? "Unlisted";
+  debate.indexName = known?.index ?? "Tape";
+  debate.tape.name = debate.name;
+  return debate;
+}
+
+function rememberedNote(note: SeatNote | null): Record<string, unknown> | null {
+  if (!note) return null;
+  return {
+    summary: note.summary,
+    argument: note.argument,
+    points: note.points,
+    verdict: note.verdict,
+    confidence: note.confidence,
+  };
+}
+
+function appendArchive(result: DebateResult) {
+  const agents: Record<string, unknown> = {};
+  for (const [key, note] of Object.entries(result.seats)) {
+    const body = rememberedNote(note);
+    agents[key] = body
+      ? { agent: key, ok: true, note: body }
+      : { agent: key, ok: false, error: "did not write a note" };
+  }
+  const record = {
+    ticker: result.ticker,
+    as_of: result.asOf,
+    model: result.model,
+    agents,
+    judge: result.judge
+      ? {
+          agent: "judge",
+          ok: true,
+          note: {
+            call: result.judge.call,
+            conviction: result.judge.conviction,
+            summary: result.judge.summary,
+            bull_points: result.judge.bullPoints,
+            bear_points: result.judge.bearPoints,
+            disagreements: result.judge.disagreements.map((row) => ({
+              topic: row.topic,
+              bull_view: row.bull,
+              bear_view: row.bear,
+            })),
+            open_questions: result.judge.openQuestions,
+          },
+        }
+      : { agent: "judge", ok: false, error: result.errors.join("; ") || "did not write a note" },
+  };
+  const file = archiveFile();
+  mkdirSync(path.dirname(file), { recursive: true });
+  appendFileSync(file, `${JSON.stringify(record)}\n`);
+}
+
 export async function runDebate(ticker: string): Promise<DebateResult> {
   const symbol = ticker.trim().toUpperCase();
   const known = findCompany(symbol);
@@ -306,16 +415,23 @@ export async function runDebate(ticker: string): Promise<DebateResult> {
   } catch (error) {
     errors.push(`judge: ${error instanceof Error ? error.message : "did not answer"}`);
   }
-  return {
+  const result: DebateResult = {
     ticker: symbol,
     name: tape.name,
     sector: known?.sector ?? "Unlisted",
     indexName: known?.index ?? "Tape",
     asOf: tape.asOf,
     model: MODEL,
+    source: "desk",
     tape,
     seats,
     judge,
     errors,
   };
+  try {
+    appendArchive(result);
+  } catch (error) {
+    result.errors.push(`archive: ${error instanceof Error ? error.message : "could not write debates.jsonl"}`);
+  }
+  return result;
 }

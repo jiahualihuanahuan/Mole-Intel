@@ -5,11 +5,16 @@ services:
     build: .
     ports:
       - "8090:8090"
-    env_file:
-      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       HOST: 0.0.0.0
       PORT: "8090"
+      MOLE_DATA: /data
+      LLM_BASE_URL: http://host.docker.internal:8000/v1
+      LLM_MODEL: qwen2.5-7b
+    volumes:
+      - ${HOME}/Mole-Intel-Debate/data:/data
     restart: unless-stopped
     healthcheck:
       test:

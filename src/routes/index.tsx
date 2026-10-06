@@ -2,13 +2,21 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useState } from "react";
 import { universe, type UniverseRow } from "@/data/universe";
-import { readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import { listArchiveFn, loadArchiveFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
 import type { DebateResult, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 const STORE = "mole-intel-debates";
 const SEAT_ORDER = ["bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+
+type Listed = {
+  ticker: string;
+  name: string;
+  sector: string;
+  indexName: string;
+  call: string;
+};
 
 function money(value: number | null): string {
   if (value == null) return "—";
@@ -28,6 +36,16 @@ function toneClass(value: number | null): string {
   return "text-ink";
 }
 
+function listedFrom(row: DebateResult): Listed {
+  return {
+    ticker: row.ticker,
+    name: row.name,
+    sector: row.sector,
+    indexName: row.indexName,
+    call: row.judge?.call ?? "",
+  };
+}
+
 function loadSaved(): DebateResult[] {
   try {
     const raw = localStorage.getItem(STORE);
@@ -42,6 +60,8 @@ function loadSaved(): DebateResult[] {
 function Home() {
   const readTape = useServerFn(readTapeFn);
   const runDebate = useServerFn(runDebateFn);
+  const listArchive = useServerFn(listArchiveFn);
+  const loadArchive = useServerFn(loadArchiveFn);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selected, setSelected] = useState<UniverseRow | null>(null);
@@ -50,10 +70,33 @@ function Home() {
   const [debate, setDebate] = useState<DebateResult | null>(null);
   const [deskState, setDeskState] = useState<"idle" | "loading" | "error">("idle");
   const [deskError, setDeskError] = useState("");
-  const [saved, setSaved] = useState<DebateResult[]>([]);
+  const [saved, setSaved] = useState<Listed[]>([]);
+  const [fromArchive, setFromArchive] = useState(false);
+
+  function showList(hits: { ticker: string; call: string }[]) {
+    const fromFile: Listed[] = hits.map((hit) => {
+      const known = universe.find((row) => row.ticker === hit.ticker);
+      return {
+        ticker: hit.ticker,
+        name: known?.name ?? hit.ticker,
+        sector: known?.sector ?? "Unlisted",
+        indexName: known?.index ?? "Tape",
+        call: hit.call,
+      };
+    });
+    const local = loadSaved()
+      .map(listedFrom)
+      .filter((row) => !fromFile.some((item) => item.ticker === row.ticker));
+    setFromArchive(fromFile.length > 0);
+    setSaved([...fromFile, ...local]);
+  }
 
   useEffect(() => {
-    setSaved(loadSaved());
+    listArchive({ data: {} })
+      .then(showList)
+      .catch(() => setSaved(loadSaved().map(listedFrom)));
+    // Load the archive once. listArchive is stable enough for this page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const matches = useMemo(() => {
@@ -67,7 +110,9 @@ function Home() {
   function remember(next: DebateResult) {
     const list = [next, ...loadSaved().filter((row) => row.ticker !== next.ticker)].slice(0, 12);
     localStorage.setItem(STORE, JSON.stringify(list));
-    setSaved(list);
+    listArchive({ data: {} })
+      .then(showList)
+      .catch(() => setSaved(loadSaved().map(listedFrom)));
   }
 
   function openCompany(row: UniverseRow) {
@@ -79,6 +124,12 @@ function Home() {
     setDeskState("idle");
     setDeskError("");
     setTapeState("loading");
+    loadArchive({ data: { ticker: row.ticker } })
+      .then((value) => {
+        if (!value) return;
+        setDebate((current) => (current?.source === "desk" && current.ticker === row.ticker ? current : value));
+      })
+      .catch(() => undefined);
     readTape({ data: { ticker: row.ticker } })
       .then((value) => {
         setTape(value);
@@ -177,7 +228,7 @@ function Home() {
       </header>
 
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-8">
-        {!selected && <Empty saved={saved} onOpen={openCompany} />}
+        {!selected && <Empty saved={saved} archive={fromArchive} onOpen={openCompany} />}
         {selected && (
           <Company
             company={selected}
@@ -194,7 +245,15 @@ function Home() {
   );
 }
 
-function Empty({ saved, onOpen }: { saved: DebateResult[]; onOpen: (row: UniverseRow) => void }) {
+function Empty({
+  saved,
+  archive,
+  onOpen,
+}: {
+  saved: Listed[];
+  archive: boolean;
+  onOpen: (row: UniverseRow) => void;
+}) {
   return (
     <section className="max-w-2xl pt-6">
       <p className="text-xs tracking-wide text-muted">The desk</p>
@@ -204,7 +263,7 @@ function Empty({ saved, onOpen }: { saved: DebateResult[]; onOpen: (row: Univers
       </p>
       {saved.length > 0 && (
         <div className="mt-8">
-          <h2 className="text-xs tracking-wide text-muted">Saved on this browser</h2>
+          <h2 className="text-xs tracking-wide text-muted">{archive ? "From the archive" : "Saved on this browser"}</h2>
           <ul className="mt-2 divide-y divide-line border-y border-line">
             {saved.map((row) => (
               <li key={row.ticker}>
@@ -222,7 +281,7 @@ function Empty({ saved, onOpen }: { saved: DebateResult[]; onOpen: (row: Univers
                 >
                   <span className="font-medium">{row.ticker}</span>
                   <span className="truncate text-sm text-muted">{row.name}</span>
-                  <span className="ml-auto text-xs capitalize text-muted">{row.judge?.call ?? "unread"}</span>
+                  <span className="ml-auto text-xs capitalize text-muted">{row.call || "unread"}</span>
                 </button>
               </li>
             ))}
@@ -250,7 +309,7 @@ function Company({
   deskError: string;
   onRun: () => void;
 }) {
-  const shown = debate?.tape ?? tape;
+  const shown = tape ?? debate?.tape ?? null;
   return (
     <article>
       <p className="text-xs tracking-wide text-muted">{company.index}</p>
@@ -275,9 +334,13 @@ function Company({
           disabled={deskState === "loading"}
           className="min-h-11 rounded-card bg-ink px-4 text-sm text-surface disabled:opacity-60"
         >
-          {deskState === "loading" ? "The desk is sitting…" : debate ? "Sit the desk again" : "Sit the desk"}
+          {deskState === "loading" ? "The desk is sitting…" : debate?.source === "archive" ? "Run it again on the 3080" : debate ? "Sit the desk again" : "Sit the desk"}
         </button>
-        <p className="text-xs text-muted">One pass. A full memo from each seat. About a minute.</p>
+        <p className="text-xs text-muted">
+          {debate?.source === "archive"
+            ? `Already in the archive${debate.asOf ? `, ${debate.asOf.slice(0, 16).replace("T", " ")} UTC` : ""}.`
+            : "One pass on the 3080. About a minute."}
+        </p>
       </div>
       {deskState === "loading" && (
         <p className="mt-4 text-sm text-muted">Bull, bear, valuation, macro, earnings, and analysts are reading. The judge goes last.</p>

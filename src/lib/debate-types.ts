@@ -43,6 +43,7 @@ export type DebateResult = {
   indexName: string;
   asOf: string;
   model: string;
+  source: "archive" | "desk";
   tape: Tape;
   seats: Record<string, SeatNote | null>;
   judge: JudgeNote | null;
