@@ -9,8 +9,19 @@ Notes stay in this browser. Sitting the desk again replaces the saved note.
 ## Run
 
 ```bash
-npm install
-npm run dev
+git pull
+cp .env.example .env
 ```
 
-The desk model is `grok-4.5` through the xAI API. Set `XAI_API_KEY` in the environment before sitting the desk.
+Put an xAI API key in `.env` as `XAI_API_KEY=...`, then:
+
+```bash
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:8090`. The first build installs dependencies and compiles the server. Later starts reuse the image until the code changes.
+
+```bash
+docker compose logs -f
+docker compose down
+```
