@@ -6,6 +6,8 @@ The page shows the company tape (price, multiples, market cap), the headlines th
 
 vLLM is not part of this Compose file. Start it yourself on the host, port 8000, model name `qwen3.5-9b`. SearXNG is expected at `192.168.86.35:8099`.
 
+Mole-Intel-Debate is merged here. Do not start a vLLM service from that repo.
+
 ## Run
 
 ```bash
