@@ -11,6 +11,31 @@ export type Tape = {
   note: string;
 };
 
+export type Headline = {
+  title: string;
+  source: string;
+  published: string | null;
+};
+
+export type CompanyInfo = {
+  price: number | null;
+  marketCap: number | null;
+  trailingPe: number | null;
+  forwardPe: number | null;
+  priceToBook: number | null;
+  evEbitda: number | null;
+  roe: number | null;
+  fcfYield: number | null;
+  sector: string;
+  industry: string;
+  targetMean: number | null;
+  high52: number | null;
+  low52: number | null;
+  dayPct: number | null;
+  return1mPct: number | null;
+  return3mPct: number | null;
+};
+
 export type SeatNote = {
   title: string;
   summary: string;
@@ -45,6 +70,8 @@ export type DebateResult = {
   model: string;
   source: "archive" | "desk";
   tape: Tape;
+  company: CompanyInfo | null;
+  news: Headline[];
   seats: Record<string, SeatNote | null>;
   judge: JudgeNote | null;
   errors: string[];

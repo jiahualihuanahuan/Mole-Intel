@@ -1,7 +1,9 @@
 name: mole-intel
 
+# The web app and the midnight desk. vLLM is not in this file.
+# It must already be running on the host at port 8000.
 services:
-  mole-intel:
+  web:
     build: .
     ports:
       - "8090:8090"
@@ -10,14 +12,16 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "8090"
+      TZ: America/Toronto
       MOLE_DATA: /data
+      PYTHON: /opt/yf/bin/python
       LLM_BASE_URL: http://host.docker.internal:8000/v1
-      LLM_MODEL: qwen2.5-7b
-      SEARXNG_URL: http://host.docker.internal:8099
+      LLM_MODEL: qwen3.5-9b
+      SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
     volumes:
-      - ${HOME}/Mole-Intel-Debate/data:/data
+      - ./data:/data
     restart: unless-stopped
     healthcheck:
       test:
@@ -30,4 +34,23 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 40s
+
+  desk:
+    build: .
+    command: ["bash", "/app/scripts/desk.sh"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: America/Toronto
+      MOLE_DATA: /data
+      PYTHON: /opt/yf/bin/python
+      LLM_BASE_URL: http://host.docker.internal:8000/v1
+      LLM_MODEL: qwen3.5-9b
+      SEARXNG_URL: http://192.168.86.35:8099
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      BATCH_LIMIT: ${BATCH_LIMIT:-500}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
