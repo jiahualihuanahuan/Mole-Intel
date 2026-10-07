@@ -16,7 +16,7 @@ services:
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
       LLM_BASE_URL: http://host.docker.internal:8000/v1
-      LLM_MODEL: qwen3.5-9b
+      LLM_MODEL: qwen2.5-7b
       SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
@@ -46,7 +46,7 @@ services:
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
       LLM_BASE_URL: http://host.docker.internal:8000/v1
-      LLM_MODEL: qwen3.5-9b
+      LLM_MODEL: qwen2.5-7b
       SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}

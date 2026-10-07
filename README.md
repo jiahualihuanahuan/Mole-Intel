@@ -4,7 +4,7 @@ A web desk for one ticker at a time. Opening a name shows the last note. If ther
 
 The page shows the company tape (price, multiples, market cap), the headlines those seats read, and the debate. Notes land in `data/debates.jsonl`.
 
-vLLM is not part of this Compose file. Start it yourself on the host, port 8000, model name `qwen3.5-9b`. SearXNG is expected at `192.168.86.35:8099`.
+vLLM is not part of this Compose file. Start it yourself on the host, port 8000, model name `qwen2.5-7b`. SearXNG is expected at `192.168.86.35:8099`.
 
 Mole-Intel-Debate is merged here. Do not start a vLLM service from that repo.
 

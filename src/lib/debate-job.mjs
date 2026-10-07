@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
-const MODEL = process.env.LLM_MODEL || "qwen3.5-9b";
+const MODEL = process.env.LLM_MODEL || "qwen2.5-7b";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
 const FRED_KEY = process.env.FRED_API_KEY || "";
