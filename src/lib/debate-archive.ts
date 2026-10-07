@@ -1,4 +1,4 @@
-import type { DebateResult, Disagreement, JudgeNote, SeatNote } from "@/lib/debate-types";
+import type { CompanyInfo, DebateResult, Disagreement, Headline, JudgeNote, SeatNote } from "@/lib/debate-types";
 
 export type ArchiveHit = {
   ticker: string;
@@ -121,6 +121,53 @@ function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
   };
 }
 
+function companyFrom(value: unknown): CompanyInfo | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const info: CompanyInfo = {
+    price: num(row.price ?? row.currentPrice ?? row.price_last),
+    marketCap: num(row.marketCap),
+    trailingPe: num(row.trailingPe ?? row.trailingPE),
+    forwardPe: num(row.forwardPe ?? row.forwardPE),
+    priceToBook: num(row.priceToBook),
+    evEbitda: num(row.evEbitda ?? row.enterpriseToEbitda),
+    roe: num(row.roe ?? row.returnOnEquity),
+    fcfYield: num(row.fcfYield ?? row.fcf_yield),
+    sector: str(row.sector),
+    industry: str(row.industry),
+    targetMean: num(row.targetMean ?? row.targetMeanPrice ?? row.avg_price_target),
+    high52: num(row.high52 ?? row.fiftyTwoWeekHigh ?? row.hist_52w_high),
+    low52: num(row.low52 ?? row.fiftyTwoWeekLow ?? row.hist_52w_low),
+    dayPct: num(row.dayPct ?? row.price_change_pct_1d),
+    return1mPct: num(row.return1mPct ?? row.return_1m_pct),
+    return3mPct: num(row.return3mPct ?? row.return_3m_pct),
+  };
+  const anyNumber = Object.values(info).some((item) => typeof item === "number");
+  if (!anyNumber && !info.sector && !info.industry) return null;
+  return info;
+}
+
+function newsFrom(value: unknown): Headline[] {
+  if (!Array.isArray(value)) return [];
+  const out: Headline[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) {
+      out.push({ title: item.trim().slice(0, 300), source: "", published: null });
+    } else if (item && typeof item === "object") {
+      const row = item as Record<string, unknown>;
+      const title = str(row.title);
+      if (!title) continue;
+      out.push({
+        title: title.slice(0, 300),
+        source: str(row.source).slice(0, 120),
+        published: str(row.published) || null,
+      });
+    }
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
 export function hitFromRecord(record: unknown): ArchiveHit | null {
   if (!record || typeof record !== "object") return null;
   const row = record as Record<string, unknown>;
@@ -151,6 +198,7 @@ export function debateFromRecord(record: unknown): DebateResult | null {
     seats[key] = seatFromNote(key, note);
   }
   const judge = judgeFromNote(unwrap(row.judge) ?? unwrap(agents.judge));
+  const news = newsFrom(row.news);
   return {
     ticker: hit.ticker,
     name: hit.ticker,
@@ -167,10 +215,12 @@ export function debateFromRecord(record: unknown): DebateResult | null {
       changePct: null,
       return3mPct: null,
       currency: null,
-      headlines: [],
+      headlines: news.map((item) => item.title),
       asOf: hit.asOf,
       note: "",
     },
+    company: companyFrom(row.company),
+    news,
     seats,
     judge,
     errors,

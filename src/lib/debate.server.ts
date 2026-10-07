@@ -79,7 +79,7 @@ export async function readTape(ticker: string): Promise<Tape> {
       currency: str(meta.currency) || null,
       headlines,
       asOf: new Date().toISOString(),
-      note: "Price tape only. No multiples, ratings, or macro series are in this packet.",
+      note: "Price tape only. Multiples and wires are on the archived note.",
     };
   } catch {
     return empty;
@@ -154,7 +154,7 @@ export function loadArchived(ticker: string): DebateResult | null {
   if (!debate) return null;
   const known = findCompany(symbol);
   debate.name = known?.name ?? symbol;
-  debate.sector = known?.sector ?? "Unlisted";
+  debate.sector = debate.company?.sector || known?.sector || "Unlisted";
   debate.indexName = known?.index ?? "Tape";
   debate.tape.name = debate.name;
   return debate;
@@ -179,11 +179,14 @@ export async function runDebate(ticker: string): Promise<DebateResult> {
   }
   const known = findCompany(symbol);
   debate.name = known?.name ?? tape?.name ?? symbol;
-  debate.sector = known?.sector ?? "Unlisted";
+  debate.sector = debate.company?.sector || known?.sector || "Unlisted";
   debate.indexName = known?.index ?? "Tape";
   debate.source = "desk";
-  debate.model = process.env.LLM_MODEL || "qwen2.5-7b";
-  if (tape) debate.tape = tape;
-  else debate.tape.name = debate.name;
+  debate.model = process.env.LLM_MODEL || "qwen3.5-9b";
+  if (tape) {
+    const archivedHeads = debate.tape.headlines;
+    debate.tape = tape;
+    if (archivedHeads.length) debate.tape.headlines = archivedHeads;
+  } else debate.tape.name = debate.name;
   return debate;
 }
