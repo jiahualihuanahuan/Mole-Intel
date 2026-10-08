@@ -48,7 +48,9 @@ export const universe: UniverseRow[] = [
   { ticker: "TM", name: "Toyota", sector: "Consumer", index: "NYSE" },
 ];
 
+import { tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
+
 export function findCompany(ticker: string): UniverseRow | null {
-  const key = ticker.trim().toUpperCase();
+  const key = tryNormalizeYahooTicker(ticker) ?? ticker.trim().toUpperCase();
   return universe.find((row) => row.ticker === key) ?? null;
 }

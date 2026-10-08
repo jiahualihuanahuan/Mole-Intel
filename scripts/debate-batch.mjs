@@ -22,7 +22,7 @@ function args() {
 
 function loadTickers() {
   const txt = fs.readFileSync(UNIVERSE, "utf8");
-  const tickers = [...txt.matchAll(/ticker:\s*"([A-Z.]{1,8})"/g)].map((m) => m[1]);
+  const tickers = [...txt.matchAll(/ticker:\s*"([A-Z0-9][A-Z0-9.-]{0,16})"/g)].map((m) => m[1]);
   return [...new Set(tickers)];
 }
 

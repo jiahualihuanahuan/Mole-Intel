@@ -13,6 +13,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
 const MODEL = process.env.LLM_MODEL || "qwen2.5-7b";
@@ -330,8 +331,9 @@ async function searxngNews(ticker) {
         seen.add(title);
         headlines.push({
           title: title.slice(0, 300),
-          source: String(r.engine || r.url || "").slice(0, 120),
+          source: linkHost(r.url) || String(r.engine || "").slice(0, 120),
           published: r.publishedDate || null,
+          url: safeHttpUrl(r.url),
         });
         if (headlines.length >= 10) break;
       }
@@ -417,7 +419,8 @@ function companySnapshot(row) {
 // ---------- Debate ----------
 
 async function debateOne(ticker) {
-  const packet = await buildPacket(ticker);
+  const symbol = normalizeYahooTicker(ticker);
+  const packet = await buildPacket(symbol);
   // Agents run in parallel — they don't see each other.
   const [bull, bear, valuation, macro, earnings, analyst] = await Promise.all([
     ask("bull", packet),
@@ -428,7 +431,7 @@ async function debateOne(ticker) {
     ask("analyst", packet),
   ]);
   const judge = await ask("judge", {
-    ticker,
+    ticker: symbol,
     packet_summary: {
       ticker: packet.ticker,
       financials: packet.financials,
@@ -440,7 +443,7 @@ async function debateOne(ticker) {
     agents: { bull, bear, valuation, macro, earnings, analyst },
   });
   return {
-    ticker,
+    ticker: symbol,
     as_of: packet.as_of,
     model: MODEL,
     company: companySnapshot(packet.financials),

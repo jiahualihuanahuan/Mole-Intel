@@ -7,6 +7,7 @@ export type Tape = {
   return3mPct: number | null;
   currency: string | null;
   headlines: string[];
+  stories?: Headline[];
   asOf: string;
   note: string;
 };
@@ -15,6 +16,7 @@ export type Headline = {
   title: string;
   source: string;
   published: string | null;
+  url?: string | null;
 };
 
 export type CompanyInfo = {

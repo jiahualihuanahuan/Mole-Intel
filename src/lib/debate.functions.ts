@@ -1,11 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ArchiveHit } from "@/lib/debate-archive";
 import type { DebateResult, Tape } from "@/lib/debate-types";
+import { normalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 function tickerOf(input: { ticker: string }): { ticker: string } {
-  const ticker = String(input?.ticker ?? "").trim().toUpperCase();
-  if (!/^[A-Z.]{1,8}$/.test(ticker)) throw new Error("Enter a ticker, like NVDA.");
-  return { ticker };
+  return { ticker: normalizeYahooTicker(String(input?.ticker ?? "")) };
 }
 
 export const readTapeFn = createServerFn({ method: "POST" })

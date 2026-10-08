@@ -1,6 +1,7 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, Tape } from "@/lib/debate-types";
+import type { DebateResult, Headline, Tape } from "@/lib/debate-types";
+import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -27,7 +28,7 @@ async function getText(url: string, timeoutMs: number): Promise<{ ok: boolean; s
 }
 
 export async function readTape(ticker: string): Promise<Tape> {
-  const symbol = ticker.trim().toUpperCase();
+  const symbol = normalizeYahooTicker(ticker);
   const known = findCompany(symbol);
   const empty: Tape = {
     ticker: symbol,
@@ -38,6 +39,7 @@ export async function readTape(ticker: string): Promise<Tape> {
     return3mPct: null,
     currency: null,
     headlines: [],
+    stories: [],
     asOf: new Date().toISOString(),
     note: "The tape did not come back. Seats may only say the numbers are unknown.",
   };
@@ -68,7 +70,7 @@ export async function readTape(ticker: string): Promise<Tape> {
     const price = finite(meta.regularMarketPrice) ?? closes.at(-1) ?? null;
     const previousClose = finite(meta.previousClose) ?? closes.at(-2) ?? null;
     const first = closes[0] ?? null;
-    const headlines = await readHeadlines(symbol);
+    const stories = await readHeadlines(symbol);
     return {
       ticker: symbol,
       name: str(meta.shortName) || known?.name || symbol,
@@ -77,7 +79,8 @@ export async function readTape(ticker: string): Promise<Tape> {
       changePct: price != null && previousClose ? (price / previousClose - 1) * 100 : null,
       return3mPct: price != null && first ? (price / first - 1) * 100 : null,
       currency: str(meta.currency) || null,
-      headlines,
+      headlines: stories.map((item) => item.title),
+      stories,
       asOf: new Date().toISOString(),
       note: "Price tape only. Multiples and wires are on the archived note.",
     };
@@ -86,7 +89,38 @@ export async function readTape(ticker: string): Promise<Tape> {
   }
 }
 
-async function readHeadlines(ticker: string): Promise<string[]> {
+async function readHeadlines(ticker: string): Promise<Headline[]> {
+  const rss = await readRss(ticker);
+  if (rss.length) return rss;
+  return readYahooSearch(ticker);
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&/g, "&")
+    .replace(/</g, "<")
+    .replace(/>/g, ">")
+    .replace(/"/g, '"')
+    .replace(/&#39;|'/g, "'")
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function xmlText(block: string, tag: string): string {
+  const match = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  return match?.[1] ? decodeXml(match[1]) : "";
+}
+
+function dayFrom(value: string | number | null): string | null {
+  if (value == null || value === "") return null;
+  const date = typeof value === "number" ? new Date(value > 1e12 ? value : value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+async function readRss(ticker: string): Promise<Headline[]> {
   try {
     const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`;
     const res = await fetch(url, {
@@ -95,14 +129,45 @@ async function readHeadlines(ticker: string): Promise<string[]> {
     });
     if (!res.ok) return [];
     const xml = await res.text();
-    const titles: string[] = [];
-    for (const match of xml.matchAll(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/g)) {
-      const title = match[1].replace(/\s+/g, " ").trim();
+    const stories: Headline[] = [];
+    for (const block of xml.split(/<item\b/i).slice(1)) {
+      const title = xmlText(block, "title");
       if (!title || /yahoo! finance/i.test(title)) continue;
-      titles.push(title.slice(0, 220));
-      if (titles.length >= 12) break;
+      const link = safeHttpUrl(xmlText(block, "link"));
+      stories.push({
+        title: title.slice(0, 300),
+        source: linkHost(link),
+        published: dayFrom(xmlText(block, "pubDate")),
+        url: link,
+      });
+      if (stories.length >= 8) break;
     }
-    return titles;
+    return stories;
+  } catch {
+    return [];
+  }
+}
+
+async function readYahooSearch(ticker: string): Promise<Headline[]> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=0&newsCount=8`;
+    const pulled = await getText(url, 8_000);
+    if (!pulled.ok) return [];
+    const body = JSON.parse(pulled.text) as { news?: { title?: string; link?: string; publisher?: string; providerPublishTime?: number }[] };
+    const stories: Headline[] = [];
+    for (const item of body.news ?? []) {
+      const title = str(item.title);
+      if (!title) continue;
+      const link = safeHttpUrl(item.link);
+      stories.push({
+        title: title.slice(0, 300),
+        source: str(item.publisher) || linkHost(link),
+        published: dayFrom(item.providerPublishTime ?? null),
+        url: link,
+      });
+      if (stories.length >= 8) break;
+    }
+    return stories;
   } catch {
     return [];
   }
@@ -143,7 +208,7 @@ export function listArchive(): ArchiveHit[] {
 }
 
 export function loadArchived(ticker: string): DebateResult | null {
-  const symbol = ticker.trim().toUpperCase();
+  const symbol = normalizeYahooTicker(ticker);
   let found: unknown = null;
   for (const record of readArchiveRecords()) {
     const hit = hitFromRecord(record);
@@ -161,7 +226,7 @@ export function loadArchived(ticker: string): DebateResult | null {
 }
 
 export async function runDebate(ticker: string): Promise<DebateResult> {
-  const symbol = ticker.trim().toUpperCase();
+  const symbol = normalizeYahooTicker(ticker);
   const job = (await import("./debate-job.mjs")) as {
     debateOne: (ticker: string) => Promise<unknown>;
     archive: (result: unknown) => void;

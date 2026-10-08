@@ -1,4 +1,5 @@
 import type { CompanyInfo, DebateResult, Disagreement, Headline, JudgeNote, SeatNote } from "@/lib/debate-types";
+import { normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 
 export type ArchiveHit = {
   ticker: string;
@@ -10,6 +11,16 @@ const SEATS = ["bull", "bear", "valuation", "macro", "earnings", "analyst"] as c
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function canonicalTicker(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "";
+  try {
+    return normalizeYahooTicker(raw);
+  } catch {
+    return raw.toUpperCase();
+  }
 }
 
 function num(value: unknown): number | null {
@@ -152,7 +163,7 @@ function newsFrom(value: unknown): Headline[] {
   const out: Headline[] = [];
   for (const item of value) {
     if (typeof item === "string" && item.trim()) {
-      out.push({ title: item.trim().slice(0, 300), source: "", published: null });
+      out.push({ title: item.trim().slice(0, 300), source: "", published: null, url: null });
     } else if (item && typeof item === "object") {
       const row = item as Record<string, unknown>;
       const title = str(row.title);
@@ -161,6 +172,7 @@ function newsFrom(value: unknown): Headline[] {
         title: title.slice(0, 300),
         source: str(row.source).slice(0, 120),
         published: str(row.published) || null,
+        url: safeHttpUrl(row.url) ?? safeHttpUrl(row.link),
       });
     }
     if (out.length >= 10) break;
@@ -171,7 +183,7 @@ function newsFrom(value: unknown): Headline[] {
 export function hitFromRecord(record: unknown): ArchiveHit | null {
   if (!record || typeof record !== "object") return null;
   const row = record as Record<string, unknown>;
-  const ticker = str(row.ticker).toUpperCase();
+  const ticker = canonicalTicker(str(row.ticker));
   if (!ticker) return null;
   const agents = row.agents && typeof row.agents === "object" ? (row.agents as Record<string, unknown>) : {};
   const judge = judgeFromNote(unwrap(row.judge) ?? unwrap(agents.judge));
@@ -216,6 +228,7 @@ export function debateFromRecord(record: unknown): DebateResult | null {
       return3mPct: null,
       currency: null,
       headlines: news.map((item) => item.title),
+      stories: news,
       asOf: hit.asOf,
       note: "",
     },
