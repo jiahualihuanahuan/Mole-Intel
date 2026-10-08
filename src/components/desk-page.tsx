@@ -2,8 +2,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readFeedsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
-import type { CompanyInfo, DebateResult, FeedReport, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { listArchiveFn, loadArchiveFn, readBoardsFn, readFeedsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import type { CompanyInfo, DebateResult, DeskBoards, FeedReport, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
@@ -91,6 +91,7 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const runDebate = useServerFn(runDebateFn);
   const listArchive = useServerFn(listArchiveFn);
   const loadArchive = useServerFn(loadArchiveFn);
+  const readBoards = useServerFn(readBoardsFn);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selected, setSelected] = useState<UniverseRow | null>(null);
@@ -103,6 +104,8 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const [deskError, setDeskError] = useState("");
   const [saved, setSaved] = useState<Listed[]>([]);
   const [fromArchive, setFromArchive] = useState(false);
+  const [boards, setBoards] = useState<DeskBoards | null>(null);
+  const [boardState, setBoardState] = useState<"loading" | "ready" | "error">("loading");
   const navigate = useNavigate();
   const request = useRef(0);
   const routeSymbol = useMemo(() => (routeTicker ? tryNormalizeYahooTicker(routeTicker) : null), [routeTicker]);
@@ -131,7 +134,14 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     listArchive({ data: {} })
       .then(showList)
       .catch(() => setSaved(loadSaved().map(listedFrom)));
-    // Load the archive once on the desk. listArchive is stable enough for this page.
+    setBoardState("loading");
+    readBoards({ data: {} })
+      .then((value) => {
+        setBoards(value);
+        setBoardState("ready");
+      })
+      .catch(() => setBoardState("error"));
+    // Load the desk lists once. The server functions are stable enough for this page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeTicker]);
 
@@ -265,7 +275,7 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   return (
     <main className="min-h-screen bg-bg text-ink">
       <header className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 py-3 backdrop-blur sm:px-8">
-        <div className="mx-auto flex max-w-5xl items-center gap-3">
+        <div className="mx-auto flex max-w-6xl items-center gap-3">
           <Link to="/" aria-label="Mole Intel, back to the desk" className="flex shrink-0 items-center gap-2 text-ink no-underline">
             <img src="/favicon.svg" alt="" width={32} height={32} className="h-8 w-8" />
             <span className="hidden font-display text-xl sm:inline">Mole Intel</span>
@@ -327,8 +337,10 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-8">
-        {!routeSymbol && !tickerRejected && <Empty saved={saved} archive={fromArchive} />}
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-8">
+        {!routeSymbol && !tickerRejected && (
+          <Empty saved={saved} archive={fromArchive} boards={boards} boardState={boardState} />
+        )}
         {tickerRejected && (
           <p className="max-w-xl pt-6 text-sm text-accent">
             That is not a Yahoo Finance ticker. Try NVDA, BRK-B, SHOP.TO, SHEL.L, or 7203.T.
@@ -352,17 +364,36 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   );
 }
 
-function Empty({ saved, archive }: { saved: Listed[]; archive: boolean }) {
+function Empty({
+  saved,
+  archive,
+  boards,
+  boardState,
+}: {
+  saved: Listed[];
+  archive: boolean;
+  boards: DeskBoards | null;
+  boardState: "loading" | "ready" | "error";
+}) {
   return (
-    <section className="max-w-2xl pt-6">
+    <section className="pt-6">
       <p className="text-xs tracking-wide text-muted">The desk</p>
-      <h1 className="font-display text-4xl leading-tight sm:text-5xl">Six seats. One judge. The split stays on the page.</h1>
+      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Six seats. One judge. The split stays on the page.</h1>
       <p className="mt-4 max-w-xl text-base text-muted">
-        Search a company. Bull, bear, valuation, macro, earnings, and analysts each read the same tape. The page keeps the company multiples, the wires, and the split the judge would not close.
+        Search a company, or start from the largest names, the bullish calls, and whatever just hit the wires.
       </p>
+      {boardState === "loading" && <p className="mt-8 text-sm text-muted">Reading the lists…</p>}
+      {boardState === "error" && <p className="mt-8 text-sm text-accent">The lists did not come back.</p>}
+      {boards && (
+        <div className="mt-8 grid gap-8 lg:grid-cols-3">
+          <Board title="Largest" hint="Market cap" rows={boards.largest} empty="No market-cap print." />
+          <Board title="Most bullish" hint="The judge, then fresh upgrades" rows={boards.bullish} empty="No bullish names yet." />
+          <Board title="Breaking" hint="Named in today's wires" rows={boards.news} empty="No company in the latest wires." />
+        </div>
+      )}
       {saved.length > 0 && (
-        <div className="mt-8">
-          <h2 className="text-xs tracking-wide text-muted">{archive ? "From the archive" : "Saved on this browser"}</h2>
+        <div className="mt-10 max-w-2xl">
+          <h2 className="text-xs tracking-wide text-muted">{archive ? "Already sat" : "Saved on this browser"}</h2>
           <ul className="mt-2 divide-y divide-line border-y border-line">
             {saved.map((row) => (
               <li key={row.ticker}>
@@ -379,6 +410,53 @@ function Empty({ saved, archive }: { saved: Listed[]; archive: boolean }) {
             ))}
           </ul>
         </div>
+      )}
+    </section>
+  );
+}
+
+function Board({
+  title,
+  hint,
+  rows,
+  empty,
+}: {
+  title: string;
+  hint: string;
+  rows: DeskBoards["largest"];
+  empty: string;
+}) {
+  return (
+    <section>
+      <h2 className="font-display text-2xl">{title}</h2>
+      <p className="text-xs tracking-wide text-muted">{hint}</p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">{empty}</p>
+      ) : (
+        <ul className="mt-2 divide-y divide-line border-y border-line">
+          {rows.map((row) => {
+            const long = row.detail.length > 28;
+            return (
+              <li key={`${title}-${row.ticker}`}>
+                <div className="flex items-start gap-2 py-2">
+                  <Link to="/t/$ticker" params={{ ticker: row.ticker }} className="min-h-11 min-w-0 flex-1 text-ink no-underline">
+                    <span className="flex items-baseline gap-2">
+                      <span className="font-medium">{row.ticker}</span>
+                      <span className="truncate text-sm text-muted">{row.name}</span>
+                      {!long && <span className="ml-auto shrink-0 text-sm">{row.detail}</span>}
+                    </span>
+                    {long && <span className="mt-0.5 block truncate text-sm">{row.detail}</span>}
+                  </Link>
+                  {row.url && (
+                    <a href={row.url} target="_blank" rel="noreferrer" className="mt-1 shrink-0 text-xs text-muted underline">
+                      Source
+                    </a>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </section>
   );

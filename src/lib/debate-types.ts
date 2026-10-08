@@ -79,6 +79,20 @@ export type Disagreement = {
   bear: string;
 };
 
+export type BoardRow = {
+  ticker: string;
+  name: string;
+  detail: string;
+  url?: string | null;
+};
+
+export type DeskBoards = {
+  asOf: string;
+  largest: BoardRow[];
+  bullish: BoardRow[];
+  news: BoardRow[];
+};
+
 export type JudgeNote = {
   call: "bullish" | "bearish" | "neutral" | "mixed";
   conviction: number | null;

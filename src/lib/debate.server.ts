@@ -1,6 +1,6 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, FeedReport, Headline, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, FeedReport, Headline, Tape } from "@/lib/debate-types";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -223,6 +223,28 @@ export function loadArchived(ticker: string): DebateResult | null {
   debate.indexName = known?.index ?? "Tape";
   debate.tape.name = debate.name;
   return debate;
+}
+
+export async function readBoards(): Promise<DeskBoards> {
+  const { universe } = await import("@/data/universe");
+  const { loadDeskBoards } = (await import("./boards.mjs")) as {
+    loadDeskBoards: (input: {
+      universe: { ticker: string; name: string }[];
+      bullish: { ticker: string; name: string; conviction: number | null }[];
+    }) => Promise<DeskBoards>;
+  };
+  const bullish = new Map<string, { ticker: string; name: string; conviction: number | null }>();
+  for (const record of readArchiveRecords()) {
+    const debate = debateFromRecord(record);
+    if (!debate?.judge || debate.judge.call !== "bullish") continue;
+    const known = findCompany(debate.ticker);
+    bullish.set(debate.ticker, {
+      ticker: debate.ticker,
+      name: known?.name || debate.name || debate.ticker,
+      conviction: debate.judge.conviction,
+    });
+  }
+  return loadDeskBoards({ universe, bullish: [...bullish.values()] });
 }
 
 export async function readFeeds(ticker: string): Promise<FeedReport> {
