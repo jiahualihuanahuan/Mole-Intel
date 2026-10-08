@@ -47,7 +47,7 @@ function loadDeskSecrets() {
 loadDeskSecrets();
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
-const MODEL = process.env.LLM_MODEL || "QuantTrio/Qwen3.5-4B-AWQ";
+const MODEL = process.env.LLM_MODEL || "qwen3.5-4b-awq";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
 const FRED_KEY = process.env.FRED_API_KEY || "";
