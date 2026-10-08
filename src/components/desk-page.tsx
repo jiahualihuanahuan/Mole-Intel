@@ -385,7 +385,7 @@ function Empty({
       {boardState === "loading" && <p className="mt-8 text-sm text-muted">Reading the lists…</p>}
       {boardState === "error" && <p className="mt-8 text-sm text-accent">The lists did not come back.</p>}
       {boards && (
-        <div className="mt-8 grid gap-8 lg:grid-cols-3">
+        <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-3">
           <Board title="Largest" hint="Market cap" rows={boards.largest} empty="No market-cap print." />
           <Board title="Most bullish" hint="The judge, then fresh upgrades" rows={boards.bullish} empty="No bullish names yet." />
           <Board title="Breaking" hint="Named in today's wires" rows={boards.news} empty="No company in the latest wires." />
@@ -427,23 +427,27 @@ function Board({
   empty: string;
 }) {
   return (
-    <section>
+    <section className="min-w-0">
       <h2 className="font-display text-2xl">{title}</h2>
       <p className="text-xs tracking-wide text-muted">{hint}</p>
       {rows.length === 0 ? (
         <p className="mt-3 text-sm text-muted">{empty}</p>
       ) : (
-        <ul className="mt-2 divide-y divide-line border-y border-line">
+        <ul className="mt-2 min-w-0 divide-y divide-line border-y border-line">
           {rows.map((row) => {
             const long = row.detail.length > 28;
             return (
-              <li key={`${title}-${row.ticker}`}>
-                <div className="flex items-start gap-2 py-2">
-                  <Link to="/t/$ticker" params={{ ticker: row.ticker }} className="min-h-11 min-w-0 flex-1 text-ink no-underline">
-                    <span className="flex items-baseline gap-2">
-                      <span className="font-medium">{row.ticker}</span>
-                      <span className="truncate text-sm text-muted">{row.name}</span>
-                      {!long && <span className="ml-auto shrink-0 text-sm">{row.detail}</span>}
+              <li key={`${title}-${row.ticker}`} className="min-w-0">
+                <div className="flex min-w-0 items-start gap-2 py-2">
+                  <Link
+                    to="/t/$ticker"
+                    params={{ ticker: row.ticker }}
+                    className="block min-h-11 min-w-0 flex-1 overflow-hidden text-ink no-underline"
+                  >
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="shrink-0 font-medium">{row.ticker}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-muted">{row.name}</span>
+                      {!long && <span className="shrink-0 text-sm">{row.detail}</span>}
                     </span>
                     {long && <span className="mt-0.5 block truncate text-sm">{row.detail}</span>}
                   </Link>
