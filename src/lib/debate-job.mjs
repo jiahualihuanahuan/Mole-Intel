@@ -47,7 +47,7 @@ function loadDeskSecrets() {
 loadDeskSecrets();
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
-const MODEL = process.env.LLM_MODEL || "qwen2.5-7b";
+const MODEL = process.env.LLM_MODEL || "Qwen3.5-9b-AWQ";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
 const FRED_KEY = process.env.FRED_API_KEY || "";
@@ -114,6 +114,7 @@ async function chat(system, user, { temperature = 0.2, maxTokens = 1800 } = {}) 
       ],
       temperature,
       max_tokens: maxTokens,
+      chat_template_kwargs: { enable_thinking: false },
     }),
   });
   const raw = await res.text();
