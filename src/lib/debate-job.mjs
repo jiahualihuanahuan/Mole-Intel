@@ -124,23 +124,30 @@ function fitCall(system, user, maxTokens) {
 async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
   let fitted = fitCall(system, user, maxTokens);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: fitted.body },
-        ],
-        temperature: 0.6,
-        top_p: 0.95,
-        top_k: 20,
-        max_tokens: fitted.output,
-        chat_template_kwargs: { enable_thinking: true },
-      }),
-    });
+    let res;
+    try {
+      res = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10 * 60 * 1000),
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: fitted.body },
+          ],
+          temperature: 0.6,
+          top_p: 0.95,
+          top_k: 20,
+          max_tokens: fitted.output,
+          chat_template_kwargs: { enable_thinking: true },
+        }),
+      });
+    } catch (error) {
+      const cause = error?.cause;
+      const detail = cause?.code || cause?.message || error?.message || "fetch failed";
+      throw new Error(`LLM unreachable at ${BASE_URL} (${detail})`);
+    }
     const raw = await res.text();
     if (res.ok) {
       const payload = JSON.parse(raw);
