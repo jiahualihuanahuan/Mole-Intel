@@ -109,16 +109,18 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     points,
     verdict: str(note.verdict),
     confidence: num(note.confidence),
+    thinking: str(note.thinking),
   };
 }
 
 function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
   if (!note) return null;
   const callRaw = str(note.call).toLowerCase();
+  const prose = [str(note.summary), str(note.argument)].filter(Boolean).join("\n\n");
   const call: JudgeNote["call"] =
     callRaw === "bullish" || callRaw === "bearish" || callRaw === "neutral" || callRaw === "mixed"
       ? callRaw
-      : "mixed";
+      : inferCall(prose);
   const disagreements: Disagreement[] = [];
   if (Array.isArray(note.disagreements)) {
     for (const item of note.disagreements) {
@@ -135,12 +137,21 @@ function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
   return {
     call,
     conviction: num(note.conviction),
-    summary: str(note.summary),
+    summary: prose,
     bullPoints: lines(note.bull_points ?? note.bullPoints, 5),
     bearPoints: lines(note.bear_points ?? note.bearPoints, 5),
     disagreements,
     openQuestions: lines(note.open_questions ?? note.openQuestions, 4),
+    thinking: str(note.thinking),
   };
+}
+
+function inferCall(text: string): JudgeNote["call"] {
+  const labeled = text.match(/\bcall\s*[:\-]\s*(bullish|bearish|neutral|mixed)\b/i);
+  const word = labeled?.[1] || [...text.matchAll(/\b(bullish|bearish|neutral|mixed)\b/gi)].at(-1)?.[1];
+  const call = word?.toLowerCase();
+  if (call === "bullish" || call === "bearish" || call === "neutral" || call === "mixed") return call;
+  return "mixed";
 }
 
 function companyFrom(value: unknown): CompanyInfo | null {

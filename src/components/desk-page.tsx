@@ -696,6 +696,12 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
         <p className="text-sm tabular-nums text-muted">Conviction {Math.round(note.conviction * 100)}</p>
       )}
       {note.summary && <Prose text={note.summary} />}
+      {note.thinking && (
+        <details className="mt-4 max-w-3xl">
+          <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
+          <Prose text={note.thinking} />
+        </details>
+      )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <PointList title="For" items={note.bullPoints} />
         <PointList title="Against" items={note.bearPoints} />
@@ -758,6 +764,12 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
       )}
       {note?.summary && <p className="mt-3 max-w-3xl text-sm font-medium leading-relaxed">{note.summary}</p>}
       {note?.argument && <Prose text={note.argument} />}
+      {note?.thinking && (
+        <details className="mt-4 max-w-3xl">
+          <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
+          <Prose text={note.thinking} />
+        </details>
+      )}
       {note && note.points.length > 0 && (
         <ul className="mt-4 max-w-3xl space-y-2">
           {note.points.map((point) => (

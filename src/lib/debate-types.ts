@@ -71,6 +71,7 @@ export type SeatNote = {
   points: string[];
   verdict: string;
   confidence: number | null;
+  thinking: string;
 };
 
 export type Disagreement = {
@@ -101,6 +102,7 @@ export type JudgeNote = {
   bearPoints: string[];
   disagreements: Disagreement[];
   openQuestions: string[];
+  thinking: string;
 };
 
 export type DebateResult = {

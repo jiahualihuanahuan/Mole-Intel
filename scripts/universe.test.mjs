@@ -32,7 +32,10 @@ test("news seat is sent to the model and shown on the page", () => {
   const archive = fs.readFileSync(new URL("../src/lib/debate-archive.ts", import.meta.url), "utf8");
   assert.match(job, /ask\("news", newsPacket\)/);
   assert.match(job, /packet\.fundamentals/);
-  assert.match(job, /You are the news analyst/);
+  assert.match(job, /qwen3-8b-awq/);
+  assert.match(job, /enable_thinking: true/);
+  assert.equal(job.includes("one JSON object"), false);
+  assert.match(job, /max_tokens: maxTokens/);
   assert.equal(job.includes("ask(\"bull\", packet)"), false);
   assert.match(page, /news: "News"/);
   assert.match(page, /Seven seats/);

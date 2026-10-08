@@ -47,7 +47,7 @@ function loadDeskSecrets() {
 loadDeskSecrets();
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
-const MODEL = process.env.LLM_MODEL || "Qwen3.5-9b-AWQ";
+const MODEL = process.env.LLM_MODEL || "qwen3-8b-awq";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
 const FRED_KEY = process.env.FRED_API_KEY || "";
@@ -56,52 +56,47 @@ const SEARXNG_TIMEOUT = Number(process.env.SEARXNG_TIMEOUT || 15000);
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
 const EARNINGS_CALLS = Math.max(1, Math.min(6, Number(process.env.EARNINGS_CALLS || 3)));
 
+const WRITE =
+  "Think through the packet first, then write the note in plain prose. Take as much length as the evidence needs. Do not use JSON or a fixed schema. Use only facts in the packet. Never invent numbers. If something is missing, say it is unknown.";
+
 const AGENTS = {
   bull: {
     role: "Bull analyst",
-    system:
-      "You are the bull analyst on a four-person investment desk. Argue the case FOR owning this stock. Use only facts in the packet; never invent numbers. Reply with one JSON object and nothing else: {thesis, evidence[<=4 short bullets], catalysts[<=3], confidence 0-1}.",
+    system: `You are the bull analyst. Argue the case FOR owning this stock, including what would have to be true and what would break the case. ${WRITE}`,
   },
   bear: {
     role: "Bear analyst",
-    system:
-      "You are the bear analyst on a four-person investment desk. Argue the case AGAINST owning this stock. Use only facts in the packet; never invent numbers. Reply with one JSON object and nothing else: {thesis, evidence[<=4 short bullets], risks[<=3], confidence 0-1}.",
+    system: `You are the bear analyst. Argue the case AGAINST owning this stock, including what would have to go wrong and what would weaken the case. ${WRITE}`,
   },
   valuation: {
     role: "Valuation analyst",
-    system:
-      "You are the valuation analyst. Compute and interpret the multiples in the packet (P/E, P/B, EV/EBITDA, FCF yield, ROE, margins) and the analyst price targets (average, high, low vs current price). Flag anything stretched or cheap. Reply with one JSON object and nothing else: {summary, metrics{pe,pb,ev_ebitda,fcf_yield,roe,gross_margin,avg_price_target,target_vs_price_pct}, verdict, confidence 0-1}. Treat missing fields as unknown, not zero.",
+    system: `You are the valuation analyst. Interpret the multiples in the packet (P/E, P/B, EV/EBITDA, FCF yield, ROE, margins) and the analyst price targets against the current price. Say what looks stretched or cheap. Treat a missing field as unknown, not zero. ${WRITE}`,
   },
   macro: {
     role: "Macro analyst",
-    system:
-      "You are the macro analyst. Assess whether the current US rate, inflation, and growth backdrop is a tailwind or headwind for this sector. The packet.macro fields are fed_funds (NY Fed effective rate), fed_target, cpi_yoy (BLS year-over-year percent, not the index), unemployment, ten_year (Treasury yield), and payroll_change. Reply with one JSON object and nothing else: {summary, backdrop{fed_funds,cpi_yoy,unemployment,ten_year}, verdict, confidence 0-1}. Treat a null field as unknown. Do not call the backdrop unavailable when those numbers are present.",
+    system: `You are the macro analyst. Say whether the US rate, inflation, and growth backdrop is a tailwind or a headwind for this sector. packet.macro fields are fed_funds (NY Fed effective rate), fed_target, cpi_yoy (BLS year-over-year percent, not the index), unemployment, ten_year (Treasury yield), and payroll_change. A null field is unknown. Do not call the backdrop unavailable when those numbers are present. ${WRITE}`,
   },
   judge: {
     role: "Judge",
-    system:
-      "You are the judge. Read the agent notes and produce a final call. The news seat summarized the headlines and how they change the company's fundamentals. Weigh that with the other notes. Do NOT force agreement: list every unresolved disagreement explicitly. Reply with one JSON object and nothing else: {call(bullish|bearish|neutral|mixed), conviction 0-1, summary, bull_points[<=3], bear_points[<=3], disagreements[{topic,bull_view,bear_view}], open_questions[<=3]}.",
+    system: `You are the judge. Read the other notes, including the news seat on how the headlines change the fundamentals. Write a long final note. Say whether the call is bullish, bearish, neutral, or mixed, and do not force the seats to agree. Spell out every disagreement that is still open. ${WRITE}`,
   },
   earnings: {
     role: "Earnings-call analyst",
-    system:
-      "You are the earnings-call analyst. Read earnings_calls in the packet (transcript excerpts, most recent first) and earnings_results (reported EPS versus consensus — that table is not a transcript). Focus on guidance, management tone, key Q&A themes, and what changed versus the prior call. Reply with one JSON object and nothing else: {most_recent{date,guidance,tone,key_quotes[<=3],qa_themes[<=3]}, trend_vs_prior, risks_flagged[<=3], confidence 0-1}. If earnings_calls is empty, say so in note and use earnings_results only. Do not invent quotes.",
+    system: `You are the earnings-call analyst. Read earnings_calls (transcript excerpts, most recent first) and earnings_results (reported EPS versus consensus, which is not a transcript). Cover guidance, management tone, what was asked, and what changed versus the prior call. If earnings_calls is empty, say so and use earnings_results only. Do not invent quotes. ${WRITE}`,
   },
   analyst: {
     role: "Analyst-ratings analyst",
-    system:
-      "You are the analyst-ratings analyst. Read packet.analyst. The source field is finnhub or nasdaq. Use ratings, price targets, and insider prints from that source only. Assess whether the street is upgrading or downgrading, whether the average target implies upside or downside from the current price, and whether insiders are buying or selling. Reply with one JSON object and nothing else: {summary, consensus, target_implied_upside_pct, recent_changes[<=4], insider_signal, verdict, confidence 0-1}. Treat missing fields as unknown, not zero. If source is none, say the analyst tape was not available.",
+    system: `You are the analyst-ratings analyst. Read packet.analyst. The source field is finnhub or nasdaq. Use only that source's ratings, price targets, and insider prints. Say whether the street is upgrading or downgrading, whether the average target is above or below the current price, and whether insiders are buying or selling. A missing field is unknown, not zero. If source is none, say the analyst tape was not available. ${WRITE}`,
   },
   news: {
     role: "News analyst",
-    system:
-      "You are the news analyst. You are the only seat who reads the headlines. Digest packet.news. Summarize what the stories say, then interpret how that news changes this company's fundamentals: revenue, margins, demand, costs, balance sheet, or guidance. Use only those headlines and packet.fundamentals. Never invent numbers, quotes, or stories that are not in the packet. If packet.news is empty, say no headlines were retrieved and that the fundamental impact is unknown. Reply with one JSON object and nothing else: {summary, headlines[<=5 short lines of what the stories said], fundamental_impact, what_changed[<=3], confidence 0-1}.",
+    system: `You are the news analyst. You are the only seat who reads the headlines. Digest packet.news. Say what the stories report, then how that news changes this company's fundamentals: revenue, margins, demand, costs, balance sheet, or guidance. Use only those headlines and packet.fundamentals. Never invent stories that are not in the packet. If packet.news is empty, say no headlines were retrieved and that the fundamental impact is unknown. ${WRITE}`,
   },
 }
 
 // ---------- LLM call (OpenAI-compatible: vLLM or Ollama) ----------
 
-async function chat(system, user, { temperature = 0.2, maxTokens = 1800 } = {}) {
+async function chat(system, user, { maxTokens = 8192 } = {}) {
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,23 +107,43 @@ async function chat(system, user, { temperature = 0.2, maxTokens = 1800 } = {}) 
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      temperature,
+      temperature: 0.6,
+      top_p: 0.95,
+      top_k: 20,
       max_tokens: maxTokens,
-      chat_template_kwargs: { enable_thinking: false },
+      chat_template_kwargs: { enable_thinking: true },
     }),
   });
   const raw = await res.text();
   if (!res.ok) throw new Error(`LLM ${res.status}: ${raw.replace(/\s+/g, " ").slice(0, 240)}`)
   const payload = JSON.parse(raw);
-  return payload?.choices?.[0]?.message?.content || "";
+  const message = payload?.choices?.[0]?.message || {};
+  return splitThink(message.content || "", message.reasoning || message.reasoning_content || "");
+}
+
+function splitThink(content, sideReasoning) {
+  const blocks = [];
+  const answer = String(content || "")
+    .replace(/<think>([\s\S]*?)<\/think>/gi, (_, body) => {
+      blocks.push(String(body || "").trim());
+      return " ";
+    })
+    .replace(/<thinking>([\s\S]*?)<\/thinking>/gi, (_, body) => {
+      blocks.push(String(body || "").trim());
+      return " ";
+    })
+    .replace(/<think>([\s\S]*)$/i, (_, body) => {
+      blocks.push(String(body || "").trim());
+      return " ";
+    })
+    .trim();
+  const thinking = [String(sideReasoning || "").trim(), ...blocks].filter(Boolean).join("\n\n");
+  if (answer) return { answer, thinking };
+  return { answer: thinking, thinking: "" };
 }
 
 function stripThink(raw) {
-  return String(raw || "")
-    .replace(/<think>[\s\S]*?<\/think>/gi, " ")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, " ")
-    .replace(/<think>[\s\S]*$/i, " ")
-    .trim();
+  return splitThink(raw, "").answer;
 }
 
 function extractJson(raw) {
@@ -145,19 +160,16 @@ function extractJson(raw) {
 
 async function ask(agentKey, packet) {
   const { system } = AGENTS[agentKey];
-  let parsed = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await chat(system, JSON.stringify(packet), {
-      temperature: 0.2,
-      maxTokens: agentKey === "judge" ? 2200 : 1400,
-    });
-    parsed = extractJson(raw);
-    if (parsed) break;
-  }
-  if (!parsed) {
-    return { agent: agentKey, ok: false, error: "model did not return valid JSON" };
-  }
-  return { agent: agentKey, ok: true, note: parsed };
+  const { answer, thinking } = await chat(system, JSON.stringify(packet), { maxTokens: 8192 });
+  const parsed = extractJson(answer);
+  const shaped =
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    ["summary", "thesis", "call", "argument", "fundamental_impact", "verdict"].some((key) => parsed[key]);
+  if (shaped) return { agent: agentKey, ok: true, note: { ...parsed, thinking } };
+  if (!answer) return { agent: agentKey, ok: false, error: "model returned nothing" };
+  return { agent: agentKey, ok: true, note: { argument: answer, thinking } };
 }
 
 // ---------- Data layer ----------
