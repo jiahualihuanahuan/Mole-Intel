@@ -15,9 +15,10 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Agent } from "undici";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 function loadDeskSecrets() {
@@ -101,11 +102,39 @@ const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
 const MAX_OUTPUT = 4096;
 const LLM_WAIT_MS = 30 * 60 * 1000;
 const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 2));
-const llmAgent = new Agent({
-  headersTimeout: LLM_WAIT_MS,
-  bodyTimeout: LLM_WAIT_MS,
-  connectTimeout: 30_000,
-});
+
+function llmPost(url, body) {
+  const target = new URL(url);
+  const payload = JSON.stringify(body);
+  const lib = target.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "https:" ? 443 : 80),
+        path: `${target.pathname}${target.search}`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+        },
+        timeout: LLM_WAIT_MS,
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const status = res.statusCode || 0;
+          resolve({ ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
+        });
+      },
+    );
+    req.on("timeout", () => req.destroy(Object.assign(new Error("LLM request timed out"), { code: "TIMEOUT" })));
+    req.on("error", reject);
+    req.end(payload);
+  });
+}
 
 function estimateTokens(text) {
   return Math.ceil(String(text || "").length / 2);
@@ -133,30 +162,24 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     let res;
     try {
-      res = await fetch(`${BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(LLM_WAIT_MS),
-        dispatcher: llmAgent,
-        body: JSON.stringify({
-          model: MODEL,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: fitted.body },
-          ],
-          temperature: 0.6,
-          top_p: 0.95,
-          top_k: 20,
-          max_tokens: fitted.output,
-          chat_template_kwargs: { enable_thinking: true },
-        }),
+      res = await llmPost(`${BASE_URL}/chat/completions`, {
+        model: MODEL,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: fitted.body },
+        ],
+        temperature: 0.6,
+        top_p: 0.95,
+        top_k: 20,
+        max_tokens: fitted.output,
+        chat_template_kwargs: { enable_thinking: true },
       });
     } catch (error) {
       const cause = error?.cause;
       const detail = cause?.code || cause?.message || error?.message || "fetch failed";
       throw new Error(`LLM unreachable at ${BASE_URL} (${detail})`);
     }
-    const raw = await res.text();
+    const raw = res.text;
     if (res.ok) {
       const payload = JSON.parse(raw);
       const message = payload?.choices?.[0]?.message || {};
