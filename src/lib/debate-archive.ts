@@ -37,7 +37,9 @@ function lines(value: unknown, limit: number): string[] {
     if (typeof item === "string" && item.trim()) out.push(item.trim());
     else if (item && typeof item === "object") {
       const row = item as Record<string, unknown>;
-      const line = [str(row.topic), str(row.view) || str(row.quote) || str(row.text)].filter(Boolean).join(": ");
+      const line = [str(row.title), str(row.topic), str(row.view) || str(row.quote) || str(row.text)]
+        .filter(Boolean)
+        .join(": ");
       if (line) out.push(line);
     }
     if (out.length >= limit) break;
@@ -71,6 +73,7 @@ function unwrap(agent: unknown): Record<string, unknown> | null {
 function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
   const recent = note.most_recent;
   const recentObj = recent && typeof recent === "object" ? (recent as Record<string, unknown>) : null;
+  const impact = str(note.fundamental_impact) || str(note.fundamentalImpact) || str(note.impact);
   const summary =
     str(note.summary) ||
     str(note.thesis) ||
@@ -79,7 +82,7 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     str(note.note);
   const argument = [
     str(note.argument),
-    str(note.fundamental_impact),
+    impact,
     str(recentObj?.tone),
     str(note.trend_vs_prior),
     str(note.insider_signal),

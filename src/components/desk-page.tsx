@@ -7,7 +7,17 @@ import type { CompanyInfo, DebateResult, DeskBoards, FeedReport, Headline, Judge
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
-const SEAT_ORDER = ["bull", "bear", "valuation", "macro", "earnings", "analyst", "news"] as const;
+const SEAT_ORDER = ["news", "bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+
+const SEAT_LABEL: Record<(typeof SEAT_ORDER)[number], string> = {
+  news: "News",
+  bull: "Bull",
+  bear: "Bear",
+  valuation: "Valuation",
+  macro: "Macro",
+  earnings: "Earnings",
+  analyst: "Analyst ratings",
+};
 
 type Listed = {
   ticker: string;
@@ -378,7 +388,7 @@ function Empty({
   return (
     <section className="pt-6">
       <p className="text-xs tracking-wide text-muted">The desk</p>
-      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Six seats. One judge. The split stays on the page.</h1>
+      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Seven seats. One reads the news. The judge keeps the split.</h1>
       <p className="mt-4 max-w-xl text-base text-muted">
         Search a company, or start from the largest names, the bullish calls, and whatever just hit the wires.
       </p>
@@ -522,7 +532,7 @@ function Company({
         </p>
       </div>
       {deskState === "loading" && (
-        <p className="mt-4 text-sm text-muted">Reading the tape, the wires, and the filings. Six seats, then the judge. A first pass takes a few minutes.</p>
+        <p className="mt-4 text-sm text-muted">Reading the tape, the wires, and the filings. The news seat digests the headlines, then the judge. A first pass takes a few minutes.</p>
       )}
       {deskError && <p className="mt-4 text-sm text-accent">{deskError}</p>}
 
@@ -611,11 +621,10 @@ function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
         <h2 className="text-xs tracking-wide text-muted">The seats</h2>
         <div className="mt-3 space-y-3">
           {SEAT_ORDER.map((key) => (
-            <Seat key={key} note={debate.seats[key] ?? null} fallback={key} />
+            <Seat key={key} note={debate.seats[key] ?? null} label={SEAT_LABEL[key]} wires={key === "news" ? wires : undefined} />
           ))}
         </div>
       </section>
-      {wires.length > 0 && <NewsList items={wires} />}
     </div>
   );
 }
@@ -731,16 +740,22 @@ function PointList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function Seat({ note, fallback }: { note: SeatNote | null; fallback: string }) {
+function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wires?: Headline[] }) {
+  const isNews = label === "News";
   return (
     <section className="rounded-card border border-line bg-surface p-4 sm:p-6">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-2xl capitalize">{note?.title || fallback}</h3>
+        <h3 className="font-display text-2xl">{label}</h3>
         {note?.confidence != null && (
           <p className="text-xs tabular-nums text-muted">Confidence {Math.round(note.confidence * 100)}</p>
         )}
       </div>
-      {!note && <p className="mt-2 text-sm text-muted">This seat did not write a note.</p>}
+      {isNews && <p className="mt-1 text-xs text-muted">What the headlines change in the fundamentals</p>}
+      {!note && (
+        <p className="mt-2 text-sm text-muted">
+          {isNews ? "No news note in this pass. Run the desk again so this seat can read the wires." : "This seat did not write a note."}
+        </p>
+      )}
       {note?.summary && <p className="mt-3 max-w-3xl text-sm font-medium leading-relaxed">{note.summary}</p>}
       {note?.argument && <Prose text={note.argument} />}
       {note && note.points.length > 0 && (
@@ -751,6 +766,27 @@ function Seat({ note, fallback }: { note: SeatNote | null; fallback: string }) {
         </ul>
       )}
       {note?.verdict && <p className="mt-4 text-sm font-medium">{note.verdict}</p>}
+      {isNews && wires && wires.length > 0 && (
+        <ul className="mt-4 divide-y divide-line border-t border-line">
+          {wires.map((item) => {
+            const href = safeHttpUrl(item.url);
+            return (
+              <li key={`${item.url || item.source}-${item.title}`} className="py-3">
+                {href ? (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-sm leading-relaxed text-ink underline decoration-line underline-offset-2">
+                    {item.title}
+                  </a>
+                ) : (
+                  <p className="text-sm leading-relaxed">{item.title}</p>
+                )}
+                {(item.source || item.published) && (
+                  <p className="mt-1 text-xs text-muted">{[item.source, item.published?.slice(0, 10)].filter(Boolean).join(" · ")}</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }

@@ -6,7 +6,8 @@
  * AlphaStreet). SearXNG is used when the homelab search box answers.
  * FRED and Finnhub are fallbacks only, and only for fields the public
  * sources missed. Finnhub's free plan has no price targets and no transcripts.
- * Six seats write notes on vLLM, then the judge lists the disagreements.
+ * Seven seats write notes on vLLM, then the judge lists the disagreements.
+ * The news seat is the only one that receives the headlines.
  *
  * Env: LLM_BASE_URL, LLM_MODEL, MOLE_DATA, PYTHON, FRED_API_KEY, SEARXNG_URL,
  * SEARXNG_TIMEOUT, FINNHUB_API_KEY, EARNINGS_CALLS.
@@ -94,7 +95,7 @@ const AGENTS = {
   news: {
     role: "News analyst",
     system:
-      "You are the news analyst. You are the only seat who reads the headlines. Digest packet.news. Summarize what the stories say, then interpret how that news changes this company's fundamentals: revenue, margins, demand, costs, balance sheet, or guidance. Use only those headlines and the fundamentals in the packet. Never invent numbers, quotes, or stories that are not in the packet. If packet.news is empty, say no headlines were retrieved and that the fundamental impact is unknown. Reply with one JSON object and nothing else: {summary, headlines[<=5 short lines of what the stories said], fundamental_impact, what_changed[<=3], confidence 0-1}.",
+      "You are the news analyst. You are the only seat who reads the headlines. Digest packet.news. Summarize what the stories say, then interpret how that news changes this company's fundamentals: revenue, margins, demand, costs, balance sheet, or guidance. Use only those headlines and packet.fundamentals. Never invent numbers, quotes, or stories that are not in the packet. If packet.news is empty, say no headlines were retrieved and that the fundamental impact is unknown. Reply with one JSON object and nothing else: {summary, headlines[<=5 short lines of what the stories said], fundamental_impact, what_changed[<=3], confidence 0-1}.",
   },
 }
 
@@ -1170,8 +1171,12 @@ async function debateOne(ticker) {
   const newsPacket = {
     ticker: packet.ticker,
     as_of: packet.as_of,
-    financials: packet.financials,
-    news: headlines || [],
+    fundamentals: companySnapshot(packet.financials),
+    news: (headlines || []).map((item) => ({
+      title: item?.title || "",
+      source: item?.source || "",
+      published: item?.published || null,
+    })),
   };
   // Agents run in parallel — they don't see each other.
   // Only the news seat gets the headlines.

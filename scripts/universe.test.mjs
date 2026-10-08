@@ -26,6 +26,20 @@ test("desk image includes the ticker module the job imports", () => {
   assert.match(docker, /yahoo-ticker\.mjs/);
 });
 
+test("news seat is sent to the model and shown on the page", () => {
+  const job = fs.readFileSync(new URL("../src/lib/debate-job.mjs", import.meta.url), "utf8");
+  const page = fs.readFileSync(new URL("../src/components/desk-page.tsx", import.meta.url), "utf8");
+  const archive = fs.readFileSync(new URL("../src/lib/debate-archive.ts", import.meta.url), "utf8");
+  assert.match(job, /ask\("news", newsPacket\)/);
+  assert.match(job, /packet\.fundamentals/);
+  assert.match(job, /You are the news analyst/);
+  assert.equal(job.includes("ask(\"bull\", packet)"), false);
+  assert.match(page, /news: "News"/);
+  assert.match(page, /Seven seats/);
+  assert.match(archive, /"news"/);
+  assert.match(archive, /fundamental_impact/);
+});
+
 test("desk runs the whole universe each night", () => {
   assert.match(desk, /whole universe/);
   assert.equal(desk.includes("BATCH_LIMIT:-500"), false);
