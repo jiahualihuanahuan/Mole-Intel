@@ -2,8 +2,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readBoardsFn, readFeedsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
-import type { CompanyInfo, DebateResult, DeskBoards, FeedReport, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
@@ -97,7 +97,6 @@ function loadSaved(): DebateResult[] {
 
 export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const readTape = useServerFn(readTapeFn);
-  const readFeeds = useServerFn(readFeedsFn);
   const runDebate = useServerFn(runDebateFn);
   const listArchive = useServerFn(listArchiveFn);
   const loadArchive = useServerFn(loadArchiveFn);
@@ -107,8 +106,6 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const [selected, setSelected] = useState<UniverseRow | null>(null);
   const [tape, setTape] = useState<Tape | null>(null);
   const [tapeState, setTapeState] = useState<"idle" | "loading" | "error">("idle");
-  const [feeds, setFeeds] = useState<FeedReport | null>(null);
-  const [feedState, setFeedState] = useState<"idle" | "loading" | "error">("idle");
   const [debate, setDebate] = useState<DebateResult | null>(null);
   const [deskState, setDeskState] = useState<"idle" | "loading" | "error">("idle");
   const [deskError, setDeskError] = useState("");
@@ -168,8 +165,6 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
       setDeskState("idle");
       setDeskError("");
       setTapeState("idle");
-      setFeeds(null);
-      setFeedState("idle");
       return;
     }
     const row = findCompany(routeSymbol) ?? {
@@ -181,22 +176,10 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     const ticket = ++request.current;
     setSelected(row);
     setTape(null);
-    setFeeds(null);
     setDebate(loadSaved().find((item) => item.ticker === routeSymbol) ?? null);
     setDeskState("idle");
     setDeskError("");
     setTapeState("loading");
-    setFeedState("loading");
-    readFeeds({ data: { ticker: routeSymbol } })
-      .then((value) => {
-        if (ticket !== request.current) return;
-        setFeeds(value);
-        setFeedState("idle");
-      })
-      .catch(() => {
-        if (ticket !== request.current) return;
-        setFeedState("error");
-      });
     loadArchive({ data: { ticker: routeSymbol } })
       .then((value) => {
         if (ticket !== request.current) return;
@@ -361,8 +344,6 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
             company={selected}
             tape={tape}
             tapeState={tapeState}
-            feeds={feeds}
-            feedState={feedState}
             debate={debate}
             deskState={deskState}
             deskError={deskError}
@@ -480,8 +461,6 @@ function Company({
   company,
   tape,
   tapeState,
-  feeds,
-  feedState,
   debate,
   deskState,
   deskError,
@@ -490,8 +469,6 @@ function Company({
   company: UniverseRow;
   tape: Tape | null;
   tapeState: "idle" | "loading" | "error";
-  feeds: FeedReport | null;
-  feedState: "idle" | "loading" | "error";
   debate: DebateResult | null;
   deskState: "idle" | "loading" | "error";
   deskError: string;
@@ -514,7 +491,6 @@ function Company({
       </dl>
       {tapeState === "loading" && <p className="mt-3 text-sm text-muted">Reading the tape…</p>}
       {tapeState === "error" && <p className="mt-3 text-sm text-accent">The tape did not load. The desk can still sit, but it will say the numbers are unknown.</p>}
-      <Feeds report={feeds ?? debate?.feeds ?? null} state={feedState} />
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button
@@ -543,37 +519,6 @@ function Company({
         </div>
       )}
     </article>
-  );
-}
-
-function Feeds({ report, state }: { report: FeedReport | null; state: "idle" | "loading" | "error" }) {
-  if (state === "loading" && !report) return <p className="mt-3 text-sm text-muted">Checking macro, Finnhub, and transcripts…</p>;
-  if (state === "error" && !report) return <p className="mt-3 text-sm text-accent">The source check did not come back.</p>;
-  if (!report) return null;
-  const macro = report.macro;
-  return (
-    <section className="mt-6">
-      <h2 className="text-xs tracking-wide text-muted">The backdrop</h2>
-      <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
-        <Fact
-          label="Fed funds"
-          value={macro.fed_funds == null ? "—" : `${macro.fed_funds.toFixed(2)}%`}
-          hint={macro.fed_funds_as_of ? `NY Fed ${macro.fed_funds_as_of}` : "NY Fed"}
-        />
-        <Fact label="CPI YoY" value={pct(macro.cpi_yoy)} hint={macro.cpi_as_of ? `BLS ${macro.cpi_as_of}` : "BLS"} />
-        <Fact
-          label="Unemployment"
-          value={macro.unemployment == null ? "—" : `${macro.unemployment.toFixed(1)}%`}
-          hint={macro.unemployment_as_of ? `BLS ${macro.unemployment_as_of}` : "BLS"}
-        />
-        <Fact
-          label="10-year"
-          value={macro.ten_year == null ? "—" : `${macro.ten_year.toFixed(2)}%`}
-          hint={macro.ten_year_as_of ? `Treasury ${macro.ten_year_as_of}` : "Treasury"}
-        />
-      </dl>
-      <p className="mt-3 max-w-3xl text-sm text-muted">{report.note}</p>
-    </section>
   );
 }
 
@@ -695,11 +640,11 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
       {note.conviction != null && (
         <p className="text-sm tabular-nums text-muted">Conviction {Math.round(note.conviction * 100)}</p>
       )}
-      {note.summary && <Prose text={note.summary} />}
+      {note.summary && <Markdown text={note.summary} />}
       {note.thinking && (
         <details className="mt-4 max-w-3xl">
           <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
-          <Prose text={note.thinking} />
+          <Markdown text={note.thinking} />
         </details>
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -712,9 +657,9 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
           <ul className="mt-2 space-y-3">
             {note.disagreements.map((row) => (
               <li key={row.topic} className="border-t border-line pt-3">
-                <p className="text-sm font-medium">{row.topic}</p>
-                {row.bull && <p className="mt-1 text-sm leading-relaxed"><span className="text-pine">Bull. </span>{row.bull}</p>}
-                {row.bear && <p className="mt-1 text-sm leading-relaxed"><span className="text-accent">Bear. </span>{row.bear}</p>}
+                <p className="text-sm font-medium">{inline(row.topic)}</p>
+                {row.bull && <p className="mt-1 text-sm leading-relaxed"><span className="text-pine">Bull. </span>{inline(row.bull)}</p>}
+                {row.bear && <p className="mt-1 text-sm leading-relaxed"><span className="text-accent">Bear. </span>{inline(row.bear)}</p>}
               </li>
             ))}
           </ul>
@@ -723,7 +668,7 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
       {note.openQuestions.length > 0 && (
         <ul className="mt-4 space-y-1">
           {note.openQuestions.map((question) => (
-            <li key={question} className="text-sm text-muted">{question}</li>
+            <li key={question} className="text-sm text-muted">{inline(question)}</li>
           ))}
         </ul>
       )}
@@ -739,7 +684,7 @@ function PointList({ title, items }: { title: string; items: string[] }) {
       <h3 className="text-xs tracking-wide text-muted">{title}</h3>
       <ul className="mt-1 space-y-1">
         {items.map((item) => (
-          <li key={item} className="text-sm leading-relaxed">{item}</li>
+          <li key={item} className="text-sm leading-relaxed">{inline(item)}</li>
         ))}
       </ul>
     </div>
@@ -762,22 +707,22 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
           {isNews ? "No news note in this pass. Run the desk again so this seat can read the wires." : "This seat did not write a note."}
         </p>
       )}
-      {note?.summary && <p className="mt-3 max-w-3xl text-sm font-medium leading-relaxed">{note.summary}</p>}
-      {note?.argument && <Prose text={note.argument} />}
+      {note?.summary && <Markdown text={note.summary} />}
+      {note?.argument && <Markdown text={note.argument} />}
       {note?.thinking && (
         <details className="mt-4 max-w-3xl">
           <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
-          <Prose text={note.thinking} />
+          <Markdown text={note.thinking} />
         </details>
       )}
       {note && note.points.length > 0 && (
-        <ul className="mt-4 max-w-3xl space-y-2">
+        <ul className="mt-4 max-w-3xl list-disc space-y-2 pl-5">
           {note.points.map((point) => (
-            <li key={point} className="text-sm leading-relaxed text-muted">{point}</li>
+            <li key={point} className="text-sm leading-relaxed text-muted">{inline(point)}</li>
           ))}
         </ul>
       )}
-      {note?.verdict && <p className="mt-4 text-sm font-medium">{note.verdict}</p>}
+      {note?.verdict && <Markdown text={note.verdict} />}
       {isNews && wires && wires.length > 0 && (
         <ul className="mt-4 divide-y divide-line border-t border-line">
           {wires.map((item) => {
@@ -803,13 +748,90 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
   );
 }
 
-function Prose({ text }: { text: string }) {
-  const paragraphs = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+function Markdown({ text }: { text: string }) {
+  const blocks = parseMarkdown(text);
+  if (blocks.length === 0) return null;
   return (
-    <div className="mt-3 max-w-3xl space-y-3">
-      {paragraphs.map((paragraph) => (
-        <p key={paragraph.slice(0, 48)} className="text-sm leading-relaxed">{paragraph}</p>
-      ))}
+    <div className="mt-3 max-w-3xl space-y-3 text-sm leading-relaxed">
+      {blocks.map((block, index) => {
+        if (block.kind === "h") {
+          const className = block.level === 1 ? "font-display text-xl text-ink" : "font-medium text-ink";
+          return block.level === 1 ? (
+            <h3 key={index} className={className}>{inline(block.text)}</h3>
+          ) : (
+            <h4 key={index} className={className}>{inline(block.text)}</h4>
+          );
+        }
+        if (block.kind === "ul" || block.kind === "ol") {
+          const items = block.items.map((item, itemIndex) => <li key={itemIndex}>{inline(item)}</li>);
+          return block.kind === "ul" ? (
+            <ul key={index} className="list-disc space-y-1 pl-5">{items}</ul>
+          ) : (
+            <ol key={index} className="list-decimal space-y-1 pl-5">{items}</ol>
+          );
+        }
+        return <p key={index}>{inline(block.text)}</p>;
+      })}
     </div>
   );
+}
+
+function parseMarkdown(raw: string): Array<{ kind: "p"; text: string } | { kind: "h"; level: number; text: string } | { kind: "ul" | "ol"; items: string[] }> {
+  const trimmed = raw.trim().replace(/^```[a-zA-Z]*\n([\s\S]*?)```$/m, "$1").trim();
+  const lines = trimmed.split(/\n/);
+  const blocks: Array<{ kind: "p"; text: string } | { kind: "h"; level: number; text: string } | { kind: "ul" | "ol"; items: string[] }> = [];
+  let paragraph: string[] = [];
+  const flush = () => {
+    const text = paragraph.join(" ").trim();
+    if (text) blocks.push({ kind: "p", text });
+    paragraph = [];
+  };
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      flush();
+      continue;
+    }
+    const heading = trimmedLine.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flush();
+      blocks.push({ kind: "h", level: heading[1].length, text: heading[2] });
+      continue;
+    }
+    const bullet = trimmedLine.match(/^[-*]\s+(.+)$/);
+    const numbered = trimmedLine.match(/^\d+[.)]\s+(.+)$/);
+    if (bullet || numbered) {
+      flush();
+      const kind = bullet ? "ul" : "ol";
+      const item = (bullet || numbered)?.[1] ?? "";
+      const last = blocks[blocks.length - 1];
+      if (last && last.kind === kind) last.items.push(item);
+      else blocks.push({ kind, items: [item] });
+      continue;
+    }
+    paragraph.push(trimmedLine);
+  }
+  flush();
+  return blocks;
+}
+
+function inline(text: string) {
+  const nodes: Array<string | { mark: "strong" | "em" | "code"; text: string }> = [];
+  const pattern = /\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*]+)\*/g;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > last) nodes.push(text.slice(last, index));
+    if (match[1] || match[2]) nodes.push({ mark: "strong", text: match[1] || match[2] });
+    else if (match[3]) nodes.push({ mark: "code", text: match[3] });
+    else if (match[4]) nodes.push({ mark: "em", text: match[4] });
+    last = index + match[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes.map((node, index) => {
+    if (typeof node === "string") return <span key={index}>{node}</span>;
+    if (node.mark === "strong") return <strong key={index} className="font-medium text-ink">{node.text}</strong>;
+    if (node.mark === "code") return <code key={index} className="rounded bg-bg px-1 text-[0.92em]">{node.text}</code>;
+    return <em key={index}>{node.text}</em>;
+  });
 }
