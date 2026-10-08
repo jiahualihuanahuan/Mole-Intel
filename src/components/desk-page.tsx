@@ -7,7 +7,7 @@ import type { CompanyInfo, DebateResult, DeskBoards, FeedReport, Headline, Judge
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
-const SEAT_ORDER = ["bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+const SEAT_ORDER = ["bull", "bear", "valuation", "macro", "earnings", "analyst", "news"] as const;
 
 type Listed = {
   ticker: string;

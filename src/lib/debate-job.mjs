@@ -79,7 +79,7 @@ const AGENTS = {
   judge: {
     role: "Judge",
     system:
-      "You are the judge on a four-person investment desk. Read the four agent notes and produce a final call. Do NOT force agreement: list every unresolved disagreement explicitly. Reply with one JSON object and nothing else: {call(bullish|bearish|neutral|mixed), conviction 0-1, summary, bull_points[<=3], bear_points[<=3], disagreements[{topic,bull_view,bear_view}], open_questions[<=3]}.",
+      "You are the judge. Read the agent notes and produce a final call. The news seat summarized the headlines and how they change the company's fundamentals. Weigh that with the other notes. Do NOT force agreement: list every unresolved disagreement explicitly. Reply with one JSON object and nothing else: {call(bullish|bearish|neutral|mixed), conviction 0-1, summary, bull_points[<=3], bear_points[<=3], disagreements[{topic,bull_view,bear_view}], open_questions[<=3]}.",
   },
   earnings: {
     role: "Earnings-call analyst",
@@ -90,6 +90,11 @@ const AGENTS = {
     role: "Analyst-ratings analyst",
     system:
       "You are the analyst-ratings analyst. Read packet.analyst. The source field is finnhub or nasdaq. Use ratings, price targets, and insider prints from that source only. Assess whether the street is upgrading or downgrading, whether the average target implies upside or downside from the current price, and whether insiders are buying or selling. Reply with one JSON object and nothing else: {summary, consensus, target_implied_upside_pct, recent_changes[<=4], insider_signal, verdict, confidence 0-1}. Treat missing fields as unknown, not zero. If source is none, say the analyst tape was not available.",
+  },
+  news: {
+    role: "News analyst",
+    system:
+      "You are the news analyst. You are the only seat who reads the headlines. Digest packet.news. Summarize what the stories say, then interpret how that news changes this company's fundamentals: revenue, margins, demand, costs, balance sheet, or guidance. Use only those headlines and the fundamentals in the packet. Never invent numbers, quotes, or stories that are not in the packet. If packet.news is empty, say no headlines were retrieved and that the fundamental impact is unknown. Reply with one JSON object and nothing else: {summary, headlines[<=5 short lines of what the stories said], fundamental_impact, what_changed[<=3], confidence 0-1}.",
   },
 }
 
@@ -1161,14 +1166,23 @@ function companySnapshot(row) {
 async function debateOne(ticker) {
   const symbol = normalizeYahooTicker(ticker);
   const packet = await buildPacket(symbol);
+  const { news: headlines, ...deskPacket } = packet;
+  const newsPacket = {
+    ticker: packet.ticker,
+    as_of: packet.as_of,
+    financials: packet.financials,
+    news: headlines || [],
+  };
   // Agents run in parallel — they don't see each other.
-  const [bull, bear, valuation, macro, earnings, analyst] = await Promise.all([
-    ask("bull", packet),
-    ask("bear", packet),
-    ask("valuation", packet),
-    ask("macro", packet),
-    ask("earnings", packet),
-    ask("analyst", packet),
+  // Only the news seat gets the headlines.
+  const [bull, bear, valuation, macro, earnings, analyst, news] = await Promise.all([
+    ask("bull", deskPacket),
+    ask("bear", deskPacket),
+    ask("valuation", deskPacket),
+    ask("macro", deskPacket),
+    ask("earnings", deskPacket),
+    ask("analyst", deskPacket),
+    ask("news", newsPacket),
   ]);
   const judge = await ask("judge", {
     ticker: symbol,
@@ -1176,23 +1190,23 @@ async function debateOne(ticker) {
       ticker: packet.ticker,
       financials: packet.financials,
       macro: packet.macro,
-      news_count: (packet.news || []).length,
+      news_count: (headlines || []).length,
       earnings_calls_found: (packet.earnings_calls || []).length,
       earnings_results: packet.earnings_results || [],
       has_finnhub: packet.analyst?.source === "finnhub",
       analyst_source: packet.analyst?.source || "none",
       feed_note: packet.report?.note || "",
     },
-    agents: { bull, bear, valuation, macro, earnings, analyst },
+    agents: { bull, bear, valuation, macro, earnings, analyst, news },
   });
   return {
     ticker: symbol,
     as_of: packet.as_of,
     model: MODEL,
     company: companySnapshot(packet.financials),
-    news: packet.news,
+    news: headlines,
     feeds: packet.report,
-    agents: { bull, bear, valuation, macro, earnings, analyst },
+    agents: { bull, bear, valuation, macro, earnings, analyst, news },
     judge,
   };
 }

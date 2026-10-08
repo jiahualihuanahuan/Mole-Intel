@@ -1,6 +1,6 @@
 # Mole Intel
 
-A web desk for one ticker at a time. Opening a name shows the last note. If there is none, six seats sit: bull, bear, valuation, macro, earnings, and analyst ratings. A judge writes the call and lists what they still do not agree on.
+A web desk for one ticker at a time. Opening a name shows the last note. If there is none, seven seats sit: bull, bear, valuation, macro, earnings, analyst ratings, and news. The news seat is the only one who reads the headlines. It summarizes them and says how they change the company's fundamentals. A judge writes the call and lists what they still do not agree on.
 
 The page shows the company tape (price, multiples, market cap), the headlines those seats read, and the debate. Notes land in `data/debates.jsonl`.
 
@@ -27,7 +27,7 @@ docker compose up --build -d
 
 ## 11pm batch
 
-The `desk` service waits until 23:00 America/Toronto, then runs the same six seats plus the judge on every developed-world name. It does not stop after 500, and it does not set a GPU power limit. The list is `src/data/universe.ts` (MSCI World, from iShares URTH holdings as of Oct 06, 2026, stored as Yahoo symbols). Notes land in the same `data/debates.jsonl` the page reads. One night is one full pass. A run that is still going at the next 11pm finishes first, then waits for the night after. Set `BATCH_LIMIT` in the desk service only if you want a shorter night; leave it unset for the whole list.
+The `desk` service waits until 23:00 America/Toronto, then runs the same seats plus the judge on every developed-world name. It does not stop after 500, and it does not set a GPU power limit. The list is `src/data/universe.ts` (MSCI World, from iShares URTH holdings as of Oct 06, 2026, stored as Yahoo symbols). Notes land in the same `data/debates.jsonl` the page reads. One night is one full pass. A run that is still going at the next 11pm finishes first, then waits for the night after. Set `BATCH_LIMIT` in the desk service only if you want a shorter night; leave it unset for the whole list.
 
 Start the site and the desk together:
 

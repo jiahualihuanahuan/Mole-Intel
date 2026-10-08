@@ -7,7 +7,7 @@ export type ArchiveHit = {
   call: string;
 };
 
-const SEATS = ["bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+const SEATS = ["bull", "bear", "valuation", "macro", "earnings", "analyst", "news"] as const;
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -77,7 +77,13 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     str(recentObj?.guidance) ||
     str(note.consensus) ||
     str(note.note);
-  const argument = [str(note.argument), str(recentObj?.tone), str(note.trend_vs_prior), str(note.insider_signal)]
+  const argument = [
+    str(note.argument),
+    str(note.fundamental_impact),
+    str(recentObj?.tone),
+    str(note.trend_vs_prior),
+    str(note.insider_signal),
+  ]
     .filter(Boolean)
     .join("\n");
   const points = [
@@ -88,6 +94,8 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     ...lines(recentObj?.key_quotes, 3),
     ...lines(recentObj?.qa_themes, 3),
     ...lines(note.recent_changes, 4),
+    ...lines(note.headlines, 5),
+    ...lines(note.what_changed, 3),
     ...pairs(note.metrics, 8),
     ...pairs(note.backdrop, 6),
   ].slice(0, 8);
