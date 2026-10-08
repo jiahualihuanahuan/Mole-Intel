@@ -2,8 +2,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
-import type { CompanyInfo, DebateResult, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { listArchiveFn, loadArchiveFn, readFeedsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import type { CompanyInfo, DebateResult, FeedReport, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
@@ -87,6 +87,7 @@ function loadSaved(): DebateResult[] {
 
 export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const readTape = useServerFn(readTapeFn);
+  const readFeeds = useServerFn(readFeedsFn);
   const runDebate = useServerFn(runDebateFn);
   const listArchive = useServerFn(listArchiveFn);
   const loadArchive = useServerFn(loadArchiveFn);
@@ -95,6 +96,8 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const [selected, setSelected] = useState<UniverseRow | null>(null);
   const [tape, setTape] = useState<Tape | null>(null);
   const [tapeState, setTapeState] = useState<"idle" | "loading" | "error">("idle");
+  const [feeds, setFeeds] = useState<FeedReport | null>(null);
+  const [feedState, setFeedState] = useState<"idle" | "loading" | "error">("idle");
   const [debate, setDebate] = useState<DebateResult | null>(null);
   const [deskState, setDeskState] = useState<"idle" | "loading" | "error">("idle");
   const [deskError, setDeskError] = useState("");
@@ -145,6 +148,8 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
       setDeskState("idle");
       setDeskError("");
       setTapeState("idle");
+      setFeeds(null);
+      setFeedState("idle");
       return;
     }
     const row = findCompany(routeSymbol) ?? {
@@ -156,10 +161,22 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     const ticket = ++request.current;
     setSelected(row);
     setTape(null);
+    setFeeds(null);
     setDebate(loadSaved().find((item) => item.ticker === routeSymbol) ?? null);
     setDeskState("idle");
     setDeskError("");
     setTapeState("loading");
+    setFeedState("loading");
+    readFeeds({ data: { ticker: routeSymbol } })
+      .then((value) => {
+        if (ticket !== request.current) return;
+        setFeeds(value);
+        setFeedState("idle");
+      })
+      .catch(() => {
+        if (ticket !== request.current) return;
+        setFeedState("error");
+      });
     loadArchive({ data: { ticker: routeSymbol } })
       .then((value) => {
         if (ticket !== request.current) return;
@@ -322,6 +339,8 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
             company={selected}
             tape={tape}
             tapeState={tapeState}
+            feeds={feeds}
+            feedState={feedState}
             debate={debate}
             deskState={deskState}
             deskError={deskError}
@@ -369,6 +388,8 @@ function Company({
   company,
   tape,
   tapeState,
+  feeds,
+  feedState,
   debate,
   deskState,
   deskError,
@@ -377,6 +398,8 @@ function Company({
   company: UniverseRow;
   tape: Tape | null;
   tapeState: "idle" | "loading" | "error";
+  feeds: FeedReport | null;
+  feedState: "idle" | "loading" | "error";
   debate: DebateResult | null;
   deskState: "idle" | "loading" | "error";
   deskError: string;
@@ -399,6 +422,7 @@ function Company({
       </dl>
       {tapeState === "loading" && <p className="mt-3 text-sm text-muted">Reading the tape…</p>}
       {tapeState === "error" && <p className="mt-3 text-sm text-accent">The tape did not load. The desk can still sit, but it will say the numbers are unknown.</p>}
+      <Feeds report={feeds ?? debate?.feeds ?? null} state={feedState} />
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button
@@ -427,6 +451,37 @@ function Company({
         </div>
       )}
     </article>
+  );
+}
+
+function Feeds({ report, state }: { report: FeedReport | null; state: "idle" | "loading" | "error" }) {
+  if (state === "loading" && !report) return <p className="mt-3 text-sm text-muted">Checking macro, Finnhub, and transcripts…</p>;
+  if (state === "error" && !report) return <p className="mt-3 text-sm text-accent">The source check did not come back.</p>;
+  if (!report) return null;
+  const macro = report.macro;
+  return (
+    <section className="mt-6">
+      <h2 className="text-xs tracking-wide text-muted">The backdrop</h2>
+      <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
+        <Fact
+          label="Fed funds"
+          value={macro.fed_funds == null ? "—" : `${macro.fed_funds.toFixed(2)}%`}
+          hint={macro.fed_funds_as_of ? `NY Fed ${macro.fed_funds_as_of}` : "NY Fed"}
+        />
+        <Fact label="CPI YoY" value={pct(macro.cpi_yoy)} hint={macro.cpi_as_of ? `BLS ${macro.cpi_as_of}` : "BLS"} />
+        <Fact
+          label="Unemployment"
+          value={macro.unemployment == null ? "—" : `${macro.unemployment.toFixed(1)}%`}
+          hint={macro.unemployment_as_of ? `BLS ${macro.unemployment_as_of}` : "BLS"}
+        />
+        <Fact
+          label="10-year"
+          value={macro.ten_year == null ? "—" : `${macro.ten_year.toFixed(2)}%`}
+          hint={macro.ten_year_as_of ? `Treasury ${macro.ten_year_as_of}` : "Treasury"}
+        />
+      </dl>
+      <p className="mt-3 max-w-3xl text-sm text-muted">{report.note}</p>
+    </section>
   );
 }
 

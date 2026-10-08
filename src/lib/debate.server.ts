@@ -1,6 +1,6 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, Headline, Tape } from "@/lib/debate-types";
+import type { DebateResult, FeedReport, Headline, Tape } from "@/lib/debate-types";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -223,6 +223,14 @@ export function loadArchived(ticker: string): DebateResult | null {
   debate.indexName = known?.index ?? "Tape";
   debate.tape.name = debate.name;
   return debate;
+}
+
+export async function readFeeds(ticker: string): Promise<FeedReport> {
+  const symbol = normalizeYahooTicker(ticker);
+  const job = (await import("./debate-job.mjs")) as {
+    sourceReport: (ticker: string) => Promise<FeedReport>;
+  };
+  return job.sourceReport(symbol);
 }
 
 export async function runDebate(ticker: string): Promise<DebateResult> {

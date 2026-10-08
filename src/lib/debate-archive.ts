@@ -1,4 +1,4 @@
-import type { CompanyInfo, DebateResult, Disagreement, Headline, JudgeNote, SeatNote } from "@/lib/debate-types";
+import type { CompanyInfo, DebateResult, Disagreement, FeedReport, Headline, JudgeNote, SeatNote } from "@/lib/debate-types";
 import { normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 
 export type ArchiveHit = {
@@ -158,6 +158,13 @@ function companyFrom(value: unknown): CompanyInfo | null {
   return info;
 }
 
+function feedReportFrom(value: unknown): FeedReport | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as FeedReport;
+  if (!row.macro || typeof row.macro !== "object" || typeof row.note !== "string") return null;
+  return row;
+}
+
 function newsFrom(value: unknown): Headline[] {
   if (!Array.isArray(value)) return [];
   const out: Headline[] = [];
@@ -234,6 +241,7 @@ export function debateFromRecord(record: unknown): DebateResult | null {
     },
     company: companyFrom(row.company),
     news,
+    feeds: feedReportFrom(row.feeds),
     seats,
     judge,
     errors,

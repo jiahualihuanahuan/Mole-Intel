@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, Tape } from "@/lib/debate-types";
+import type { DebateResult, FeedReport, Tape } from "@/lib/debate-types";
 import { normalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 function tickerOf(input: { ticker: string }): { ticker: string } {
@@ -26,6 +26,13 @@ export const loadArchiveFn = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<DebateResult | null> => {
     const { loadArchived } = await import("./debate.server");
     return loadArchived(data.ticker);
+  });
+
+export const readFeedsFn = createServerFn({ method: "POST" })
+  .validator(tickerOf)
+  .handler(async ({ data }): Promise<FeedReport> => {
+    const { readFeeds } = await import("./debate.server");
+    return readFeeds(data.ticker);
   });
 
 export const runDebateFn = createServerFn({ method: "POST" })

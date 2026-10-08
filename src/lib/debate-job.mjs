@@ -2,9 +2,11 @@
 // @ts-nocheck
 /**
  * Debate job used by the Mole Intel desk.
- * One ticker: yfinance, FRED, SearXNG, and Finnhub build the packet, six seats
- * write notes on vLLM, then the judge lists the disagreements. The page archives
- * the result to MOLE_DATA/debates.jsonl.
+ * One ticker: public prints first (NY Fed, BLS, Treasury, Nasdaq, Yahoo,
+ * AlphaStreet). SearXNG is used when the homelab search box answers.
+ * FRED and Finnhub are fallbacks only, and only for fields the public
+ * sources missed. Finnhub's free plan has no price targets and no transcripts.
+ * Six seats write notes on vLLM, then the judge lists the disagreements.
  *
  * Env: LLM_BASE_URL, LLM_MODEL, MOLE_DATA, PYTHON, FRED_API_KEY, SEARXNG_URL,
  * SEARXNG_TIMEOUT, FINNHUB_API_KEY, EARNINGS_CALLS.
@@ -13,7 +15,35 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
+
+function loadDeskSecrets() {
+  const candidates = [
+    path.join(process.cwd(), ".secrets", "desk.env"),
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".secrets", "desk.env"),
+  ];
+  for (const file of candidates) {
+    let text = "";
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1).trim();
+      if (key && value && !process.env[key]) process.env[key] = value;
+    }
+    return;
+  }
+}
+
+loadDeskSecrets();
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
 const MODEL = process.env.LLM_MODEL || "qwen2.5-7b";
@@ -44,7 +74,7 @@ const AGENTS = {
   macro: {
     role: "Macro analyst",
     system:
-      "You are the macro analyst. Assess whether the current rate, inflation, and growth backdrop is a tailwind or headwind for this sector. Reply with one JSON object and nothing else: {summary, backdrop{fed_funds,cpi_yoy,unemployment,ten_year}, verdict, confidence 0-1}. Treat missing fields as unknown.",
+      "You are the macro analyst. Assess whether the current US rate, inflation, and growth backdrop is a tailwind or headwind for this sector. The packet.macro fields are fed_funds (NY Fed effective rate), fed_target, cpi_yoy (BLS year-over-year percent, not the index), unemployment, ten_year (Treasury yield), and payroll_change. Reply with one JSON object and nothing else: {summary, backdrop{fed_funds,cpi_yoy,unemployment,ten_year}, verdict, confidence 0-1}. Treat a null field as unknown. Do not call the backdrop unavailable when those numbers are present.",
   },
   judge: {
     role: "Judge",
@@ -54,12 +84,12 @@ const AGENTS = {
   earnings: {
     role: "Earnings-call analyst",
     system:
-      "You are the earnings-call analyst. Read the most recent earnings-call transcript (and up to two older ones for trend) in the packet. Focus on: guidance (raised/lowered/maintained), management tone, key Q&A themes, and what changed versus the prior call. The MOST RECENT call is the priority — older calls are context only. Reply with one JSON object and nothing else: {most_recent{date,guidance,tone,key_quotes[<=3],qa_themes[<=3]}, trend_vs_prior, risks_flagged[<=3], confidence 0-1}. If no transcript is available, reply {most_recent:null,trend_vs_prior:null,risks_flagged:[],confidence:0,note:'no transcript found'}.",
+      "You are the earnings-call analyst. Read earnings_calls in the packet (transcript excerpts, most recent first) and earnings_results (reported EPS versus consensus — that table is not a transcript). Focus on guidance, management tone, key Q&A themes, and what changed versus the prior call. Reply with one JSON object and nothing else: {most_recent{date,guidance,tone,key_quotes[<=3],qa_themes[<=3]}, trend_vs_prior, risks_flagged[<=3], confidence 0-1}. If earnings_calls is empty, say so in note and use earnings_results only. Do not invent quotes.",
   },
   analyst: {
     role: "Analyst-ratings analyst",
     system:
-      "You are the analyst-ratings analyst. Read the Finnhub ratings and price-target data in the packet (recent rating changes with firm/action/grade, consensus, average/high/low targets, number of analysts, insider transactions). Assess whether Wall Street is upgrading or downgrading, whether the average target implies upside or downside from the current price, and whether insiders are buying or selling. Reply with one JSON object and nothing else: {summary, consensus, target_implied_upside_pct, recent_changes[<=4], insider_signal, verdict, confidence 0-1}. Treat missing fields as unknown, not zero.",
+      "You are the analyst-ratings analyst. Read packet.analyst. The source field is finnhub or nasdaq. Use ratings, price targets, and insider prints from that source only. Assess whether the street is upgrading or downgrading, whether the average target implies upside or downside from the current price, and whether insiders are buying or selling. Reply with one JSON object and nothing else: {summary, consensus, target_implied_upside_pct, recent_changes[<=4], insider_signal, verdict, confidence 0-1}. Treat missing fields as unknown, not zero. If source is none, say the analyst tape was not available.",
   },
 }
 
@@ -166,50 +196,334 @@ async function runPython(code) {
     const child = spawn(PYTHON, ["-c", code], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 25_000);
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     child.on("close", (code) => {
+      clearTimeout(timer);
       if (code !== 0) reject(new Error(`python failed: ${stderr.slice(0, 300)}`));
       else resolve(stdout.trim());
     });
   });
 }
 
-async function fred(seriesId) {
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const BLS_UA = "Mozilla/5.0 (compatible; MoleDesk/1.0; +https://www.bls.gov)";
+const NASDAQ_HEADERS = {
+  accept: "application/json",
+  origin: "https://www.nasdaq.com",
+  referer: "https://www.nasdaq.com/",
+  "user-agent": BROWSER_UA,
+};
+
+const MACRO_CACHE = { at: 0, value: null };
+const MACRO_TTL_MS = 6 * 60 * 60 * 1000;
+const NEWS_CACHE = new Map();
+const NEWS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function finite(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function parseNasdaqAmount(raw) {
+  if (raw == null) return null;
+  let text = String(raw).trim();
+  if (!text || text === "--" || /^n\/?a$/i.test(text)) return null;
+  const paren = /^\(.*\)$/.test(text);
+  text = text.replace(/[$,%\s]/g, "").replace(/[()]/g, "");
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return null;
+  return paren ? -Math.abs(value) : value;
+}
+
+function monthStamp(name, year) {
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const index = months.findIndex((month) => String(name).toLowerCase().startsWith(month));
+  if (index < 0 || !year) return `${name} ${year}`.trim();
+  return `${year}-${String(index + 1).padStart(2, "0")}`;
+}
+
+export function parseBlsLatest(xml) {
+  const text = String(xml)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
+  const unemployment = text.match(/Unemployment Rate:\s*([0-9.]+)%\s*in\s+([A-Za-z]+)\s+(\d{4})/);
+  const cpi = text.match(/Consumer Price Index \(CPI\):\s*([+-]?[0-9.]+)%\s*in\s+([A-Za-z]+)\s+(\d{4})/);
+  const payroll = text.match(/Payroll Employment:\s*([+-]?[0-9,]+)/);
+  return {
+    unemployment: unemployment ? Number(unemployment[1]) : null,
+    unemployment_as_of: unemployment ? monthStamp(unemployment[2], unemployment[3]) : null,
+    cpi_mom: cpi ? Number(cpi[1]) : null,
+    cpi_mom_as_of: cpi ? monthStamp(cpi[2], cpi[3]) : null,
+    payroll_change: payroll ? Number(payroll[1].replace(/,/g, "")) : null,
+  };
+}
+
+export function cpiYoyFromBls(text) {
+  const rows = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line.startsWith("CUUR0000SA0")) continue;
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 4) continue;
+    if (!/^M(0[1-9]|1[0-2])$/.test(parts[2])) continue;
+    const value = Number(parts[3]);
+    const year = Number(parts[1]);
+    if (!Number.isFinite(value) || !Number.isFinite(year)) continue;
+    rows.push({ year, month: Number(parts[2].slice(1)), value });
+  }
+  const last = rows.at(-1);
+  if (!last) return null;
+  const prev = rows.find((row) => row.year === last.year - 1 && row.month === last.month);
+  if (!prev?.value) return null;
+  return {
+    cpi_yoy: Math.round((last.value / prev.value - 1) * 1000) / 10,
+    cpi_index: last.value,
+    cpi_as_of: `${last.year}-${String(last.month).padStart(2, "0")}`,
+  };
+}
+
+export function tenYearFromTreasuryCsv(csv) {
+  const lines = String(csv)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return null;
+  const header = lines[0].split(",").map((cell) => cell.replace(/"/g, "").trim());
+  const index = header.findIndex((cell) => cell === "10 Yr");
+  if (index < 0) return null;
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",").map((cell) => cell.replace(/"/g, "").trim());
+    const value = Number(cols[index]);
+    if (!Number.isFinite(value)) continue;
+    const [mm, dd, yyyy] = (cols[0] || "").split("/");
+    const as_of = yyyy && mm && dd ? `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}` : cols[0] || null;
+    return { ten_year: value, ten_year_as_of: as_of };
+  }
+  return null;
+}
+
+export function effrFromNyFed(body) {
+  const row = (body?.refRates || []).find((item) => item?.type === "EFFR" && Number.isFinite(Number(item.percentRate)));
+  if (!row) return null;
+  const from = Number(row.targetRateFrom);
+  const to = Number(row.targetRateTo);
+  return {
+    fed_funds: Number(row.percentRate),
+    fed_funds_as_of: typeof row.effectiveDate === "string" ? row.effectiveDate : null,
+    fed_target: Number.isFinite(from) && Number.isFinite(to) ? `${from.toFixed(2)}-${to.toFixed(2)}` : null,
+  };
+}
+
+export function fiscalRank(title) {
+  const match = String(title).match(/Q([1-4])\s+(\d{4})/i);
+  if (!match) return 0;
+  return Number(match[2]) * 10 + Number(match[1]);
+}
+
+function decodeHtml(value) {
+  return String(value)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&|&#0*38;/g, "&")
+    .replace(/<|&#0*60;/g, "<")
+    .replace(/>|&#0*62;/g, ">")
+    .replace(/"|&#0*34;/g, '"')
+    .replace(/&#8217;|&#039;|&#39;|'/g, "'")
+    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&#8211;|&ndash;/g, "-")
+    .replace(/&nbsp;|&#160;/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getText(url, timeoutMs, headers) {
+  const res = await fetch(url, {
+    headers: { "user-agent": BROWSER_UA, accept: "application/json,text/html,text/plain,*/*", ...headers },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return { ok: res.ok, status: res.status, text: await res.text() };
+}
+
+async function fredLatest(seriesId) {
   if (!FRED_KEY) return null;
-  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=1`;
+  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-    const j = await res.json();
-    const v = j?.observations?.[0]?.value;
-    return v && v !== "." ? Number(v) : null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const observations = body?.observations || [];
+    const numbers = observations
+      .map((row) => ({ date: row.date, value: row.value && row.value !== "." ? Number(row.value) : null }))
+      .filter((row) => Number.isFinite(row.value));
+    return numbers;
   } catch {
     return null;
   }
 }
 
-// ---------- Finnhub: analyst ratings, price targets, insider transactions ----------
+async function readMacro() {
+  if (MACRO_CACHE.value && Date.now() - MACRO_CACHE.at < MACRO_TTL_MS) return MACRO_CACHE.value;
+  const macro = {
+    fed_funds: null,
+    fed_funds_as_of: null,
+    fed_target: null,
+    cpi_yoy: null,
+    cpi_index: null,
+    cpi_as_of: null,
+    cpi_mom: null,
+    unemployment: null,
+    unemployment_as_of: null,
+    ten_year: null,
+    ten_year_as_of: null,
+    ten_year_yield: null,
+    payroll_change: null,
+    sources: {},
+  };
+  const [ny, treasury, blsRss, cpiFile] = await Promise.all([
+    getText("https://markets.newyorkfed.org/api/rates/all/latest.json", 15_000).catch(() => null),
+    getText(
+      "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all?type=daily_treasury_yield_curve&page&_format=csv",
+      15_000,
+    ).catch(() => null),
+    getText("https://www.bls.gov/feed/bls_latest.rss", 15_000, { "user-agent": BLS_UA, accept: "application/rss+xml,application/xml,text/xml" }).catch(
+      () => null,
+    ),
+    getText("https://download.bls.gov/pub/time.series/cu/cu.data.1.AllItems", 40_000, { "user-agent": BLS_UA, accept: "text/plain" }).catch(
+      () => null,
+    ),
+  ]);
+  if (ny?.ok) {
+    try {
+      const parsed = effrFromNyFed(JSON.parse(ny.text));
+      if (parsed) {
+        Object.assign(macro, parsed);
+        macro.sources.fed_funds = "NY Fed EFFR";
+      }
+    } catch {
+      // ignore a torn payload
+    }
+  }
+  if (treasury?.ok) {
+    const parsed = tenYearFromTreasuryCsv(treasury.text);
+    if (parsed) {
+      macro.ten_year = parsed.ten_year;
+      macro.ten_year_as_of = parsed.ten_year_as_of;
+      macro.sources.ten_year = "US Treasury yield curve";
+    }
+  }
+  if (blsRss?.ok) {
+    const parsed = parseBlsLatest(blsRss.text);
+    macro.unemployment = parsed.unemployment;
+    macro.unemployment_as_of = parsed.unemployment_as_of;
+    macro.cpi_mom = parsed.cpi_mom;
+    macro.payroll_change = parsed.payroll_change;
+    if (parsed.unemployment != null) macro.sources.unemployment = "BLS latest numbers";
+  }
+  if (cpiFile?.ok) {
+    const parsed = cpiYoyFromBls(cpiFile.text);
+    if (parsed) {
+      macro.cpi_yoy = parsed.cpi_yoy;
+      macro.cpi_index = parsed.cpi_index;
+      macro.cpi_as_of = parsed.cpi_as_of;
+      macro.sources.cpi = "BLS CPI-U CUUR0000SA0";
+    }
+  }
+  const missing =
+    macro.fed_funds == null || macro.unemployment == null || macro.ten_year == null || macro.cpi_yoy == null;
+  if (FRED_KEY && missing) {
+    const [fredFunds, fredCpi, fredUnemp, fredTen] = await Promise.all([
+      macro.fed_funds == null ? fredLatest("FEDFUNDS") : null,
+      macro.cpi_yoy == null ? fredLatest("CPIAUCSL") : null,
+      macro.unemployment == null ? fredLatest("UNRATE") : null,
+      macro.ten_year == null ? fredLatest("GS10") : null,
+    ]);
+    if (macro.fed_funds == null && fredFunds?.[0]) {
+      macro.fed_funds = fredFunds[0].value;
+      macro.fed_funds_as_of = fredFunds[0].date;
+      macro.sources.fed_funds = "FRED FEDFUNDS";
+    }
+    if (macro.unemployment == null && fredUnemp?.[0]) {
+      macro.unemployment = fredUnemp[0].value;
+      macro.unemployment_as_of = fredUnemp[0].date;
+      macro.sources.unemployment = "FRED UNRATE";
+    }
+    if (macro.ten_year == null && fredTen?.[0]) {
+      macro.ten_year = fredTen[0].value;
+      macro.ten_year_as_of = fredTen[0].date;
+      macro.sources.ten_year = "FRED GS10";
+    }
+    if (macro.cpi_yoy == null && fredCpi && fredCpi.length >= 13) {
+      const latest = fredCpi[0].value;
+      const yearAgo = fredCpi[12].value;
+      if (latest && yearAgo) {
+        macro.cpi_yoy = Math.round((latest / yearAgo - 1) * 1000) / 10;
+        macro.cpi_index = latest;
+        macro.cpi_as_of = fredCpi[0].date;
+        macro.sources.cpi = "FRED CPIAUCSL";
+      }
+    }
+  }
+  macro.ten_year_yield = macro.ten_year;
+  const filled = [macro.fed_funds, macro.cpi_yoy, macro.unemployment, macro.ten_year].filter((value) => value != null).length;
+  MACRO_CACHE.at = filled >= 2 ? Date.now() : Date.now() - MACRO_TTL_MS + 60_000;
+  MACRO_CACHE.value = macro;
+  return macro;
+}
 
 async function finnhub(path) {
-  if (!FINNHUB_KEY) return null;
+  if (!FINNHUB_KEY) return { ok: false, status: 0, json: null, reason: "no_key" };
   const url = `https://finnhub.io/api/v1${path}${path.includes("?") ? "&" : "?"}token=${FINNHUB_KEY}`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-    if (!res.ok) return null;
-    return await res.json();
+    const json = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, json, reason: res.ok ? "ok" : "http" };
   } catch {
-    return null;
+    return { ok: false, status: 0, json: null, reason: "error" };
   }
 }
 
+function finnhubStatus(calls) {
+  if (!FINNHUB_KEY) return "no_key";
+  if (calls.some((call) => call.reason === "error")) return "error";
+  if (calls.some((call) => call.status === 401 || call.status === 403)) return "rejected";
+  return "empty";
+}
+
 async function finnhubData(ticker) {
-  if (!FINNHUB_KEY) return { ratings: null, targets: null, insider: null };
-  const [ratings, targets, insider] = await Promise.all([
-    finnhub(`/stock/recommendation?symbol=${ticker}`),
-    finnhub(`/stock/price-target?symbol=${ticker}`),
-    finnhub(`/stock/insider-transactions?symbol=${ticker}`),
-  ]);
-  // Ratings: list of {buy, hold, sell, strongBuy, strongSell, period, symbol}
+  if (!FINNHUB_KEY) {
+    return { ratings: null, targets: null, insider: null, earnings: null, status: "no_key" };
+  }
+  const symbols = nasdaqSymbols(ticker);
+  let ratings = null;
+  let targets = null;
+  let insider = null;
+  let earnings = null;
+  let calls = [];
+  for (const symbol of symbols) {
+    const batch = await Promise.all([
+      finnhub(`/stock/recommendation?symbol=${encodeURIComponent(symbol)}`),
+      finnhub(`/stock/price-target?symbol=${encodeURIComponent(symbol)}`),
+      finnhub(`/stock/insider-transactions?symbol=${encodeURIComponent(symbol)}`),
+      finnhub(`/stock/earnings?symbol=${encodeURIComponent(symbol)}`),
+    ]);
+    calls = batch;
+    const [rec, target, insiderCall, earn] = batch;
+    if (Array.isArray(rec.json) && rec.json.length) ratings = rec.json;
+    if (target.json && typeof target.json === "object" && target.json.targetMean != null) targets = target.json;
+    const insiderRows = Array.isArray(insiderCall.json)
+      ? insiderCall.json
+      : Array.isArray(insiderCall.json?.data)
+        ? insiderCall.json.data
+        : null;
+    if (insiderRows?.length) insider = insiderRows;
+    if (Array.isArray(earn.json) && earn.json.length) earnings = earn.json;
+    if (ratings || targets || insider) break;
+  }
   let ratingsSummary = null;
   if (Array.isArray(ratings) && ratings.length) {
     const latest = ratings[0];
@@ -231,7 +545,6 @@ async function finnhubData(ticker) {
         : null,
     };
   }
-  // Price targets: {targetHigh, targetLow, targetMean, targetMedian, lastUpdated}
   let targetsSummary = null;
   if (targets && typeof targets === "object") {
     targetsSummary = {
@@ -242,7 +555,6 @@ async function finnhubData(ticker) {
       last_updated: targets.lastUpdated,
     };
   }
-  // Insider transactions: list of {name, share, change, transactionDate, transactionCode}
   let insiderSummary = null;
   if (Array.isArray(insider) && insider.length) {
     const recent = insider.slice(0, 10);
@@ -250,7 +562,6 @@ async function finnhubData(ticker) {
     let sells = 0;
     for (const tx of recent) {
       const code = String(tx.transactionCode || "");
-      // P = open market purchase, S = open market sale
       if (code === "P") buys += 1;
       else if (code === "S") sells += 1;
     }
@@ -266,74 +577,305 @@ async function finnhubData(ticker) {
       })),
     };
   }
-  return { ratings: ratingsSummary, targets: targetsSummary, insider: insiderSummary };
+  const earningsSummary = Array.isArray(earnings)
+    ? earnings.slice(0, 4).map((row) => ({
+        period: row.period,
+        actual: row.actual,
+        estimate: row.estimate,
+        surprise_pct: row.surprisePercent,
+      }))
+    : null;
+  const status = ratingsSummary || targetsSummary || insiderSummary ? "ok" : finnhubStatus(calls);
+  return { ratings: ratingsSummary, targets: targetsSummary, insider: insiderSummary, earnings: earningsSummary, status };
 }
 
-// ---------- Earnings-call transcripts via SearXNG ----------
+function nasdaqSymbols(ticker) {
+  const raw = String(ticker || "").toUpperCase();
+  const base = raw.split(".")[0].replace("/", "-");
+  return [...new Set([base, raw].filter(Boolean))];
+}
+
+async function nasdaqJson(path) {
+  try {
+    const res = await fetch(`https://api.nasdaq.com${path}`, {
+      headers: NASDAQ_HEADERS,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    if (!body?.data || body.data.symbol == null && body?.status?.rCode >= 400) return null;
+    return body.data;
+  } catch {
+    return null;
+  }
+}
+
+function tableRow(table, label) {
+  return (table?.rows || []).find((row) => String(row?.value1 || "").trim().toLowerCase() === label.toLowerCase()) || null;
+}
+
+const SNAPSHOT_CACHE = new Map();
+const TRANSCRIPT_INDEX = new Map();
+const SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+
+async function nasdaqSnapshot(ticker) {
+  const key = nasdaqSymbols(ticker).join("|");
+  const cached = SNAPSHOT_CACHE.get(key);
+  if (cached && Date.now() - cached.at < SNAPSHOT_TTL_MS) return cached.value;
+  const value = await loadNasdaqSnapshot(ticker);
+  SNAPSHOT_CACHE.set(key, { at: Date.now(), value });
+  return value;
+}
+
+async function loadNasdaqSnapshot(ticker) {
+  for (const symbol of nasdaqSymbols(ticker)) {
+    const [info, summary, targets, ratings, insider, earnings, financials] = await Promise.all([
+      nasdaqJson(`/api/quote/${encodeURIComponent(symbol)}/info?assetclass=stocks`),
+      nasdaqJson(`/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`),
+      nasdaqJson(`/api/analyst/${encodeURIComponent(symbol)}/targetprice`),
+      nasdaqJson(`/api/analyst/${encodeURIComponent(symbol)}/ratings`),
+      nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/insider-trades?limit=10`),
+      nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/earnings-surprise`),
+      nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/financials?frequency=1`),
+    ]);
+    if (!info?.symbol && !summary?.symbol) continue;
+    const consensus = targets?.consensusOverview || {};
+    const analystCount = String(ratings?.ratingsSummary || "").match(/(\d+)\s+analysts/i);
+    const tradeRows = insider?.numberOfTrades?.rows || [];
+    const trade = (label) => {
+      const row = tradeRows.find((item) => String(item.insiderTrade || "").toLowerCase() === label.toLowerCase());
+      return row ? parseNasdaqAmount(row.months3) : null;
+    };
+    const ratios = financials?.financialRatiosTable;
+    const income = financials?.incomeStatementTable;
+    const cash = financials?.cashFlowTable;
+    const ratio = (label) => {
+      const amount = parseNasdaqAmount(tableRow(ratios, label)?.value2);
+      return amount == null ? null : amount / 100;
+    };
+    const dollars = (table, label) => {
+      const amount = parseNasdaqAmount(tableRow(table, label)?.value2);
+      return amount == null ? null : amount * 1000;
+    };
+    const revenue = dollars(income, "Total Revenue");
+    const operatingCash = dollars(cash, "Net Cash Flow-Operating");
+    const capex = dollars(cash, "Capital Expenditures");
+    const surpriseRows = earnings?.earningsSurpriseTable?.rows || [];
+    return {
+      symbol: info?.symbol || summary?.symbol || symbol,
+      listing_note: (info?.symbol || symbol) === String(ticker).toUpperCase() ? null : `Nasdaq listing ${info?.symbol || symbol}`,
+      price: parseNasdaqAmount(info?.primaryData?.lastSalePrice),
+      marketCap: parseNasdaqAmount(summary?.summaryData?.MarketCap?.value),
+      sector: summary?.summaryData?.Sector?.value || "",
+      industry: summary?.summaryData?.Industry?.value || "",
+      grossMargins: ratio("Gross Margin"),
+      profitMargins: ratio("Profit Margin"),
+      returnOnEquity: ratio("After Tax ROE"),
+      totalRevenue: revenue,
+      operatingCashFlow: operatingCash,
+      capex,
+      freeCashflow: operatingCash != null && capex != null ? operatingCash + capex : null,
+      analyst: {
+        source: "nasdaq",
+        symbol: info?.symbol || symbol,
+        consensus: ratings?.meanRatingType || null,
+        analysts: analystCount ? Number(analystCount[1]) : null,
+        summary: ratings?.ratingsSummary || null,
+        targets: {
+          high: finite(Number(consensus.highPriceTarget)) ? Number(consensus.highPriceTarget) : null,
+          low: finite(Number(consensus.lowPriceTarget)) ? Number(consensus.lowPriceTarget) : null,
+          mean: finite(Number(consensus.priceTarget)) ? Number(consensus.priceTarget) : null,
+          buy: consensus.buy ?? null,
+          hold: consensus.hold ?? null,
+          sell: consensus.sell ?? null,
+        },
+        insider: {
+          open_market_buys_3m: trade("Number of Open Market Buys"),
+          sells_3m: trade("Number of Sells"),
+        },
+      },
+      earnings: surpriseRows.slice(0, 4).map((row) => ({
+        fiscal_quarter_end: row.fiscalQtrEnd,
+        date: row.dateReported,
+        eps: finite(Number(row.eps)) ? Number(row.eps) : parseNasdaqAmount(row.eps),
+        consensus: parseNasdaqAmount(row.consensusForecast),
+        surprise_pct: parseNasdaqAmount(row.percentageSurprise),
+      })),
+    };
+  }
+  return null;
+}
+
+function analystLine(block) {
+  if (!block || block.source === "none") return "No analyst tape.";
+  const mean = block.targets?.mean;
+  const count = block.ratings?.analysts || block.analysts;
+  const consensus = block.consensus || block.ratings?.consensus || block.summary;
+  const parts = [block.source === "finnhub" ? "Finnhub" : "Nasdaq"];
+  if (typeof consensus === "string" && consensus) parts.push(consensus.split(".")[0]);
+  if (count) parts.push(`${count} analysts`);
+  if (mean != null) parts.push(`target $${Number(mean).toFixed(0)}`);
+  return parts.join(" · ");
+}
+
+export function transcriptLinksFromHtml(html) {
+  const found = [];
+  const seen = new Set();
+  const pattern = /<a[^>]+href="(https:\/\/news\.alphastreet\.com\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(String(html)))) {
+    const url = match[1].replace(/&/g, "&");
+    const title = decodeHtml(match[2].replace(/<[^>]+>/g, " "));
+    if (!/earnings call transcript/i.test(title)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    found.push({ url, title, rank: fiscalRank(title) });
+  }
+  return found.sort((a, b) => b.rank - a.rank || a.title.localeCompare(b.title));
+}
+
+function transcriptExcerpt(html) {
+  let text = String(html).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const article = text.match(/<article[\s\S]*?<\/article>/i);
+  text = decodeHtml((article ? article[0] : text).replace(/<[^>]+>/g, " "));
+  const start = text.search(/\b(Presentation|Corporate Participants|Operator)\b/);
+  const body = start >= 0 ? text.slice(start) : text;
+  return body.slice(0, 3200);
+}
+
+async function alphaStreetCalls(ticker, withBodies) {
+  const base = nasdaqSymbols(ticker)[0].toLowerCase();
+  let links = TRANSCRIPT_INDEX.get(base);
+  if (!links || Date.now() - links.at > SNAPSHOT_TTL_MS) {
+    const indexUrl = `https://news.alphastreet.com/ticker/${encodeURIComponent(base)}/transcripts/`;
+    let index;
+    try {
+      index = await getText(indexUrl, 15_000, { accept: "text/html" });
+    } catch {
+      return [];
+    }
+    if (!index.ok) return [];
+    links = { at: Date.now(), rows: transcriptLinksFromHtml(index.text).slice(0, EARNINGS_CALLS) };
+    TRANSCRIPT_INDEX.set(base, links);
+  }
+  if (!withBodies) {
+    return links.rows.map((link) => ({
+      title: link.title,
+      source: "AlphaStreet",
+      url: link.url,
+      kind: "transcript",
+      excerpt: "",
+    }));
+  }
+  const calls = [];
+  for (const link of links.rows) {
+    try {
+      const page = await getText(link.url, 15_000, { accept: "text/html" });
+      if (!page.ok) continue;
+      const dated = page.text.match(/dated\s+([A-Za-z]+\.?\s+\d{1,2},\s+\d{4})/i);
+      calls.push({
+        title: link.title,
+        source: "AlphaStreet",
+        url: link.url,
+        published: dated ? dated[1] : null,
+        kind: "transcript",
+        excerpt: transcriptExcerpt(page.text),
+      });
+    } catch {
+      // one missed call should not drop the rest
+    }
+  }
+  return calls;
+}
 
 async function earningsTranscripts(ticker) {
-  const queries = [
-    `${ticker} earnings call transcript Q`,
-    `${ticker} earnings call highlights guidance`,
-  ];
+  const direct = await alphaStreetCalls(ticker, true);
+  if (direct.length) return direct;
+  const queries = [`${ticker} earnings call transcript Q`, `${ticker} earnings call highlights guidance`];
   const snippets = [];
   const seen = new Set();
   for (const q of queries) {
     try {
       const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(q)}&format=json&categories=news`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(SEARXNG_TIMEOUT) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.min(SEARXNG_TIMEOUT, 4000)) });
       if (!res.ok) continue;
-      const j = await res.json();
-      for (const r of j?.results || []) {
-        const title = String(r.title || "").trim();
-        const content = String(r.content || "").trim();
+      const body = await res.json();
+      for (const row of body?.results || []) {
+        const title = String(row.title || "").trim();
+        const content = String(row.content || "").trim();
         const key = title.slice(0, 80);
         if (!title || seen.has(key)) continue;
         seen.add(key);
         snippets.push({
           title: title.slice(0, 300),
-          source: String(r.engine || "").slice(0, 120),
-          published: r.publishedDate || null,
+          source: String(row.engine || "searxng").slice(0, 120),
+          published: row.publishedDate || null,
+          url: safeHttpUrl(row.url),
+          kind: "search_snippet",
           excerpt: content.slice(0, 600),
         });
-        if (snippets.length >= EARNINGS_CALLS * 2) break;
+        if (snippets.length >= EARNINGS_CALLS) break;
       }
     } catch {
-      // best-effort
+      // homelab search is optional
     }
-    if (snippets.length >= EARNINGS_CALLS * 2) break;
+    if (snippets.length >= EARNINGS_CALLS) break;
   }
-  // Most recent first; keep up to EARNINGS_CALLS.
-  return snippets.slice(0, EARNINGS_CALLS);
+  return snippets;
 }
 
-// ---------- SearXNG news search ----------
-
-const NEWS_CACHE = new Map(); // ticker -> { at, headlines }
-const NEWS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+async function yahooHeadlines(ticker) {
+  try {
+    const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`;
+    const res = await fetch(url, {
+      headers: { "user-agent": BROWSER_UA, accept: "application/rss+xml,application/xml,text/xml,*/*" },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const stories = [];
+    for (const block of xml.split(/<item\b/i).slice(1)) {
+      const titleMatch = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const linkMatch = block.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+      const dateMatch = block.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i);
+      const title = decodeHtml(titleMatch?.[1] || "");
+      if (!title || /yahoo! finance/i.test(title)) continue;
+      const link = safeHttpUrl(decodeHtml(linkMatch?.[1] || ""));
+      stories.push({
+        title: title.slice(0, 300),
+        source: linkHost(link) || "Yahoo Finance",
+        published: dateMatch ? decodeHtml(dateMatch[1]) : null,
+        url: link,
+      });
+      if (stories.length >= 8) break;
+    }
+    return stories;
+  } catch {
+    return [];
+  }
+}
 
 async function searxngNews(ticker) {
   const cached = NEWS_CACHE.get(ticker);
-  if (cached && Date.now() - cached.at < NEWS_CACHE_TTL_MS) return cached.headlines;
-
-  const queries = [ `${ticker} stock news`, `${ticker} earnings` ];
+  if (cached && Date.now() - cached.at < NEWS_CACHE_TTL_MS && cached.headlines.length) return cached;
+  const queries = [`${ticker} stock news`, `${ticker} earnings`];
   const headlines = [];
   const seen = new Set();
   for (const q of queries) {
     try {
       const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(q)}&format=json&categories=news`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(SEARXNG_TIMEOUT) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.min(SEARXNG_TIMEOUT, 4000)) });
       if (!res.ok) continue;
-      const j = await res.json();
-      for (const r of j?.results || []) {
-        const title = String(r.title || "").trim();
+      const body = await res.json();
+      for (const row of body?.results || []) {
+        const title = String(row.title || "").trim();
         if (!title || seen.has(title)) continue;
         seen.add(title);
         headlines.push({
           title: title.slice(0, 300),
-          source: linkHost(r.url) || String(r.engine || "").slice(0, 120),
-          published: r.publishedDate || null,
-          url: safeHttpUrl(r.url),
+          source: linkHost(row.url) || String(row.engine || "").slice(0, 120),
+          published: row.publishedDate || null,
+          url: safeHttpUrl(row.url),
         });
         if (headlines.length >= 10) break;
       }
@@ -342,53 +884,251 @@ async function searxngNews(ticker) {
     }
     if (headlines.length >= 10) break;
   }
-  NEWS_CACHE.set(ticker, { at: Date.now(), headlines });
-  return headlines;
+  let source = "searxng";
+  if (!headlines.length) {
+    const yahoo = await yahooHeadlines(ticker);
+    headlines.push(...yahoo);
+    source = yahoo.length ? "yahoo" : "none";
+  }
+  const pack = { at: Date.now(), headlines, source };
+  NEWS_CACHE.set(ticker, pack);
+  return pack;
+}
+
+async function yahooChart(ticker) {
+  const urls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=3mo`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=3mo`,
+  ];
+  for (const url of urls) {
+    try {
+      const pulled = await getText(url, 12_000);
+      if (!pulled.ok) continue;
+      const body = JSON.parse(pulled.text);
+      const result = body?.chart?.result?.[0];
+      const meta = result?.meta || {};
+      const closes = (result?.indicators?.quote?.[0]?.close || []).filter((value) => typeof value === "number" && Number.isFinite(value));
+      const price = finite(meta.regularMarketPrice) ?? closes.at(-1) ?? null;
+      const previous = finite(meta.chartPreviousClose) ?? finite(meta.previousClose) ?? closes.at(-2) ?? null;
+      const monthAgo = closes.length >= 22 ? closes[closes.length - 22] : null;
+      const first = closes[0] ?? null;
+      return {
+        currentPrice: price,
+        price_last: price,
+        price_prev_close: previous,
+        price_change_pct_1d: price != null && previous ? (price / previous - 1) * 100 : null,
+        return_1m_pct: price != null && monthAgo ? (price / monthAgo - 1) * 100 : null,
+        return_3m_pct: price != null && first ? (price / first - 1) * 100 : null,
+        fiftyTwoWeekHigh: finite(meta.fiftyTwoWeekHigh),
+        fiftyTwoWeekLow: finite(meta.fiftyTwoWeekLow),
+        currency: typeof meta.currency === "string" ? meta.currency : null,
+      };
+    } catch {
+      // try the other host
+    }
+  }
+  return null;
+}
+
+function fillMissing(target, extra) {
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (value == null || value === "") continue;
+    if (target[key] == null || target[key] === "") target[key] = value;
+  }
+  return target;
+}
+
+async function yfinanceInstalled() {
+  try {
+    await runPython("import yfinance\nprint('ok')");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function emptyMacro() {
+  return {
+    fed_funds: null,
+    fed_funds_as_of: null,
+    fed_target: null,
+    cpi_yoy: null,
+    cpi_as_of: null,
+    cpi_mom: null,
+    unemployment: null,
+    unemployment_as_of: null,
+    ten_year: null,
+    ten_year_as_of: null,
+    payroll_change: null,
+  };
+}
+
+function reportFrom(ticker, parts) {
+  const macro = parts.macro || emptyMacro();
+  const analystSource = parts.analyst?.source === "finnhub" || parts.analyst?.source === "nasdaq" ? parts.analyst.source : "none";
+  const transcriptSource = parts.transcripts?.[0]?.source || (parts.transcriptCount ? "AlphaStreet" : "none");
+  const report = {
+    ticker,
+    macro: {
+      fed_funds: finite(macro.fed_funds),
+      fed_funds_as_of: macro.fed_funds_as_of || null,
+      fed_target: macro.fed_target || null,
+      cpi_yoy: finite(macro.cpi_yoy),
+      cpi_as_of: macro.cpi_as_of || null,
+      cpi_mom: finite(macro.cpi_mom),
+      unemployment: finite(macro.unemployment),
+      unemployment_as_of: macro.unemployment_as_of || null,
+      ten_year: finite(macro.ten_year),
+      ten_year_as_of: macro.ten_year_as_of || null,
+      payroll_change: finite(macro.payroll_change),
+    },
+    finnhub: parts.finnhub || "no_key",
+    analyst: analystSource,
+    analyst_line: analystLine(parts.analyst),
+    transcripts: {
+      count: parts.transcriptCount ?? (parts.transcripts?.length || 0),
+      source: transcriptSource === "none" ? "none" : transcriptSource,
+      latest: parts.transcripts?.[0]?.title || null,
+    },
+    fundamentals: parts.fundamentals || "none",
+    news: parts.news || "none",
+    note: "",
+  };
+  const bits = [];
+  if (report.finnhub === "unused") {
+    bits.push("Finnhub is saved as a fallback and was not called. Its free plan has no price targets and no transcripts.");
+  } else if (report.finnhub === "no_key") bits.push("Finnhub has no API key.");
+  else if (report.finnhub === "ok") bits.push("Nasdaq had no analyst tape, so Finnhub filled ratings and insider prints. Price targets are not on the free Finnhub plan.");
+  else if (report.finnhub === "rejected") bits.push("Finnhub rejected the key.");
+  else bits.push(`Finnhub: ${report.finnhub}.`);
+  if (report.analyst === "none") bits.push("No analyst tape.");
+  else bits.push(`Analyst tape: ${report.analyst_line}.`);
+  if (report.transcripts.count) bits.push(`Transcripts: ${report.transcripts.count} from ${report.transcripts.source}.`);
+  else bits.push("No earnings transcript was retrieved.");
+  if (report.news === "yahoo") bits.push("SearXNG at 192.168.86.35:8099 did not answer from this host, so the wires are Yahoo.");
+  else if (report.news === "searxng") bits.push("Wires are from the homelab search box.");
+  else bits.push("No wires.");
+  bits.push(`Fundamentals: ${report.fundamentals}.`);
+  if ([report.macro.fed_funds, report.macro.cpi_yoy, report.macro.unemployment, report.macro.ten_year].some((value) => value == null)) {
+    bits.push("One or more macro prints did not load.");
+  } else bits.push("Macro is public: NY Fed, BLS, and Treasury. FRED is not called while those four print.");
+  report.note = bits.join(" ");
+  return report;
+}
+
+function publicAnalyst(nasdaq) {
+  const block = nasdaq?.analyst;
+  if (!block) return null;
+  if (block.targets?.mean == null && !block.consensus) return null;
+  return block;
+}
+
+async function analystTape(ticker, nasdaq) {
+  const ready = publicAnalyst(nasdaq);
+  if (ready) {
+    return {
+      analyst: ready,
+      hub: { status: FINNHUB_KEY ? "unused" : "no_key", ratings: null, targets: null, insider: null, earnings: null },
+    };
+  }
+  const hub = await finnhubData(ticker);
+  const analyst = hub.status === "ok"
+    ? { source: "finnhub", ratings: hub.ratings, targets: hub.targets, insider: hub.insider, consensus: null }
+    : { source: "none", ratings: null, targets: null, insider: null };
+  return { analyst, hub };
+}
+
+async function sourceReport(ticker) {
+  const symbol = normalizeYahooTicker(ticker);
+  const [macro, nasdaq, calls, wires, yfinanceReady] = await Promise.all([
+    readMacro(),
+    nasdaqSnapshot(symbol),
+    alphaStreetCalls(symbol, false),
+    searxngNews(symbol),
+    yfinanceInstalled(),
+  ]);
+  const { analyst, hub } = await analystTape(symbol, nasdaq);
+  return reportFrom(symbol, {
+    macro,
+    finnhub: hub.status,
+    analyst,
+    transcripts: calls,
+    transcriptCount: calls.length,
+    fundamentals: yfinanceReady ? "yfinance, Nasdaq if a field is missing" : nasdaq ? "Nasdaq statements (yfinance is not installed)" : "none",
+    news: wires.source,
+  });
 }
 
 async function buildPacket(ticker) {
-  const [yfRaw, fed, cpi, unemp, teny, news, finnhub, transcripts] = await Promise.all([
-    yf(ticker).catch((e) => JSON.stringify({ error: e.message })),
-    fred("FEDFUNDS"),
-    fred("CPIAUCSL"),
-    fred("UNRATE"),
-    fred("GS10"),
-    searxngNews(ticker).catch(() => []),
-    finnhubData(ticker).catch(() => ({ ratings: null, targets: null, insider: null })),
-    earningsTranscripts(ticker).catch(() => []),
+  const [yfRaw, macro, newsPack, nasdaq, transcripts, chart] = await Promise.all([
+    yf(ticker).catch((error) => JSON.stringify({ error: error.message })),
+    readMacro(),
+    searxngNews(ticker),
+    nasdaqSnapshot(ticker),
+    earningsTranscripts(ticker),
+    yahooChart(ticker),
   ]);
   let financials = {};
+  let fundamentals = "none";
   try {
     financials = JSON.parse(yfRaw);
   } catch {
-    financials = { error: "yfinance parse failed", raw: String(yfRaw).slice(0, 200) };
+    financials = { error: "yfinance parse failed" };
+  }
+  const yfinanceOk = financials && !financials.error && (financials.currentPrice != null || financials.trailingPE != null || financials.marketCap != null);
+  if (yfinanceOk) fundamentals = "yfinance";
+  else financials = {};
+  if (chart) fillMissing(financials, chart);
+  if (!yfinanceOk && chart?.currentPrice != null) fundamentals = "yahoo chart";
+  if (nasdaq) {
+    fillMissing(financials, {
+      currentPrice: nasdaq.price,
+      marketCap: nasdaq.marketCap,
+      sector: nasdaq.sector,
+      industry: nasdaq.industry,
+      grossMargins: nasdaq.grossMargins,
+      profitMargins: nasdaq.profitMargins,
+      returnOnEquity: nasdaq.returnOnEquity,
+      totalRevenue: nasdaq.totalRevenue,
+      operatingCashFlow: nasdaq.operatingCashFlow,
+      capex: nasdaq.capex,
+      freeCashflow: nasdaq.freeCashflow,
+    });
+    if (!yfinanceOk && (nasdaq.marketCap != null || nasdaq.profitMargins != null)) {
+      fundamentals = chart?.currentPrice != null ? "yahoo chart + Nasdaq statements" : "Nasdaq statements";
+    }
+    if (nasdaq.listing_note) financials.listing_note = nasdaq.listing_note;
   }
   if (financials.freeCashflow && financials.marketCap) {
     financials.fcf_yield = financials.freeCashflow / financials.marketCap;
   }
-  // Attach analyst targets relative to current price for the valuation agent.
-  if (financials.currentPrice && finnhub.targets?.mean) {
-    financials.avg_price_target = finnhub.targets.mean;
-    financials.target_vs_price_pct = ((finnhub.targets.mean / financials.currentPrice) - 1) * 100;
+  const { analyst, hub } = await analystTape(ticker, nasdaq);
+  const targetMean = analyst.targets?.mean;
+  if (financials.currentPrice && targetMean) {
+    financials.avg_price_target = targetMean;
+    financials.target_vs_price_pct = (targetMean / financials.currentPrice - 1) * 100;
+    financials.targetMeanPrice = financials.targetMeanPrice ?? targetMean;
   }
+  const earningsResults = nasdaq?.earnings?.length ? nasdaq.earnings : hub.earnings || [];
+  const report = reportFrom(ticker, {
+    macro,
+    finnhub: hub.status,
+    analyst,
+    transcripts,
+    fundamentals,
+    news: newsPack.source,
+  });
   return {
     ticker,
     as_of: new Date().toISOString(),
     financials,
-    macro: {
-      fed_funds: fed,
-      cpi_index: cpi,
-      unemployment: unemp,
-      ten_year_yield: teny,
-    },
-    news,
-    analyst: finnhub,
+    macro,
+    news: newsPack.headlines,
+    analyst,
     earnings_calls: transcripts,
+    earnings_results: earningsResults,
+    report,
   };
-}
-
-function finite(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function companySnapshot(row) {
@@ -438,7 +1178,10 @@ async function debateOne(ticker) {
       macro: packet.macro,
       news_count: (packet.news || []).length,
       earnings_calls_found: (packet.earnings_calls || []).length,
-      has_finnhub: !!(packet.analyst.ratings || packet.analyst.targets || packet.analyst.insider),
+      earnings_results: packet.earnings_results || [],
+      has_finnhub: packet.analyst?.source === "finnhub",
+      analyst_source: packet.analyst?.source || "none",
+      feed_note: packet.report?.note || "",
     },
     agents: { bull, bear, valuation, macro, earnings, analyst },
   });
@@ -448,6 +1191,7 @@ async function debateOne(ticker) {
     model: MODEL,
     company: companySnapshot(packet.financials),
     news: packet.news,
+    feeds: packet.report,
     agents: { bull, bear, valuation, macro, earnings, analyst },
     judge,
   };
@@ -461,5 +1205,5 @@ function archive(result) {
   fs.appendFileSync(path.join(DATA_DIR, "debates.jsonl"), line);
 }
 
-export { debateOne, archive };
+export { debateOne, archive, sourceReport, buildPacket };
 

@@ -8,3 +8,5 @@ artifacts
 /data
 
 .env
+
+.secrets/
