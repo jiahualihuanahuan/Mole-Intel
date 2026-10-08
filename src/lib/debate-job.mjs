@@ -94,17 +94,36 @@ const AGENTS = {
   },
 }
 
-// ---------- LLM call (OpenAI-compatible: vLLM or Ollama) ----------
-
+// Sequence cap for vLLM --max-model-len 65536.
+// Seven seats run at once, so the reply stays at 4096 tokens.
+// That parallel load fits --gpu-memory-utilization 0.9 on a 10GB 3080.
 const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
+const MAX_OUTPUT = 4096;
 
-async function chat(system, user, { maxTokens = 4096 } = {}) {
-  let output = Math.min(maxTokens, CONTEXT - 2048);
-  let bodyUser = String(user || "");
+function estimateTokens(text) {
+  return Math.ceil(String(text || "").length / 2);
+}
+
+function fitCall(system, user, maxTokens) {
+  const margin = 512;
+  let output = Math.min(maxTokens, MAX_OUTPUT, CONTEXT - 2048);
+  let body = String(user || "");
+  const fixed = estimateTokens(system) + margin + 32;
+  let room = CONTEXT - output - fixed;
+  if (room < 2000) {
+    output = Math.max(512, CONTEXT - fixed - 2000);
+    room = CONTEXT - output - fixed;
+  }
+  const charBudget = Math.max(2000, room * 2);
+  if (body.length > charBudget) body = `${body.slice(0, charBudget)}\n[truncated to fit the context window]`;
+  const left = CONTEXT - fixed - estimateTokens(body);
+  output = Math.max(256, Math.min(output, left));
+  return { body, output };
+}
+
+async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
+  let fitted = fitCall(system, user, maxTokens);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const charBudget = Math.max(4000, (CONTEXT - output - 512) * 2);
-    const payloadUser =
-      bodyUser.length > charBudget ? `${bodyUser.slice(0, charBudget)}\n[truncated to fit the context window]` : bodyUser;
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -113,12 +132,12 @@ async function chat(system, user, { maxTokens = 4096 } = {}) {
         model: MODEL,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: payloadUser },
+          { role: "user", content: fitted.body },
         ],
         temperature: 0.6,
         top_p: 0.95,
         top_k: 20,
-        max_tokens: output,
+        max_tokens: fitted.output,
         chat_template_kwargs: { enable_thinking: true },
       }),
     });
@@ -130,8 +149,7 @@ async function chat(system, user, { maxTokens = 4096 } = {}) {
     }
     const tooLong = res.status === 400 && /maximum context length|reduce the length/i.test(raw);
     if (tooLong && attempt < 2) {
-      output = Math.max(1024, Math.floor(output / 2));
-      bodyUser = bodyUser.slice(0, Math.floor(bodyUser.length * 0.6));
+      fitted = fitCall(system, fitted.body.slice(0, Math.floor(fitted.body.length * 0.6)), Math.max(512, Math.floor(fitted.output / 2)));
       continue;
     }
     throw new Error(`LLM ${res.status}: ${raw.replace(/\s+/g, " ").slice(0, 240)}`);
@@ -178,7 +196,7 @@ function extractJson(raw) {
 
 async function ask(agentKey, packet) {
   const { system } = AGENTS[agentKey];
-  const { answer, thinking } = await chat(system, packetText(packet), { maxTokens: 8192 });
+  const { answer, thinking } = await chat(system, packetText(packet), { maxTokens: MAX_OUTPUT });
   const parsed = extractJson(answer);
   const shaped =
     parsed &&
