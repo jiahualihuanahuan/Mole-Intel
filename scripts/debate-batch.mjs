@@ -1,8 +1,10 @@
 /**
  * Nightly six-seat batch. Imports the same job the web app uses.
  *   node scripts/debate-batch.mjs [--limit N]
- * Cursor lives in $MOLE_DATA/batch-cursor.json so each night continues
- * through the universe instead of restarting at AAPL.
+ * No limit (the 11pm default) checks every name in the universe once,
+ * from the top of the list. A positive --limit or BATCH_LIMIT walks only
+ * that many names. The cursor in $MOLE_DATA/batch-cursor.json continues
+ * a capped run the next night instead of restarting at the first ticker.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -48,7 +50,7 @@ async function main() {
   const { limit } = args();
   const universe = loadTickers();
   if (!universe.length) throw new Error("No tickers in src/data/universe.ts");
-  const offset = readCursor() % universe.length;
+  const offset = limit > 0 ? readCursor() % universe.length : 0;
   const count = limit > 0 ? Math.min(limit, universe.length) : universe.length;
   const slice = [];
   for (let i = 0; i < count; i++) slice.push(universe[(offset + i) % universe.length]);
@@ -67,7 +69,7 @@ async function main() {
       console.error(`ERR ${ticker}: ${error instanceof Error ? error.message : error}`);
     }
   }
-  writeCursor((offset + slice.length) % universe.length);
+  writeCursor(limit > 0 ? (offset + slice.length) % universe.length : 0);
   console.error(`Done. ok=${ok} fail=${fail}`);
 }
 

@@ -20,3 +20,11 @@ test("desk waits for 11pm and does not set a power limit", () => {
   assert.equal(desk.includes("nvidia-smi"), false);
   assert.equal(desk.includes("tomorrow 00:00"), false);
 });
+
+test("desk runs the whole universe each night", () => {
+  assert.match(desk, /whole universe/);
+  assert.equal(desk.includes("BATCH_LIMIT:-500"), false);
+  assert.equal(desk.includes("--limit \"${BATCH_LIMIT:-500}\""), false);
+  const compose = fs.readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  assert.equal(compose.includes("BATCH_LIMIT"), false);
+});

@@ -50,7 +50,6 @@ services:
       SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
-      BATCH_LIMIT: ${BATCH_LIMIT:-500}
     volumes:
       - ./data:/data
     restart: unless-stopped

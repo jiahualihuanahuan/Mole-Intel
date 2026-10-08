@@ -27,7 +27,7 @@ docker compose up --build -d
 
 ## 11pm batch
 
-The `desk` service waits until 23:00 America/Toronto, then runs the same six seats plus the judge. It does not set a GPU power limit. The list is the developed-world names in `src/data/universe.ts` (MSCI World, from iShares URTH holdings as of Oct 06, 2026, stored as Yahoo symbols). Notes land in the same `data/debates.jsonl` the page reads. `BATCH_LIMIT` defaults to 500 so one night does not run into the next. A cursor in `data/batch-cursor.json` continues the next night until the whole list has been checked, then starts again.
+The `desk` service waits until 23:00 America/Toronto, then runs the same six seats plus the judge on every developed-world name. It does not stop after 500, and it does not set a GPU power limit. The list is `src/data/universe.ts` (MSCI World, from iShares URTH holdings as of Oct 06, 2026, stored as Yahoo symbols). Notes land in the same `data/debates.jsonl` the page reads. One night is one full pass. A run that is still going at the next 11pm finishes first, then waits for the night after. Set `BATCH_LIMIT` in the desk service only if you want a shorter night; leave it unset for the whole list.
 
 Start the site and the desk together:
 
