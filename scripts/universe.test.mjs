@@ -33,7 +33,7 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /ask\("news", newsPacket\)/);
   assert.match(job, /packet\.fundamentals/);
   assert.match(job, /qwen3\.5-4b-awq/);
-  assert.match(job, /32768/);
+  assert.match(job, /65536/);
   assert.match(job, /const MAX_OUTPUT = 4096/);
   assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /gpu-memory-utilization 0\.9/);
   assert.match(job, /enable_thinking: true/);
