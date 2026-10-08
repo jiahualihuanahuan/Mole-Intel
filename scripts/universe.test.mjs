@@ -36,7 +36,8 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /65536/);
   assert.match(job, /const MAX_OUTPUT = 4096/);
   assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /gpu-memory-utilization 0\.9/);
-  assert.match(job, /enable_thinking: true/);
+  assert.match(job, /headersTimeout: LLM_WAIT_MS/);
+  assert.match(job, /LLM_CONCURRENCY \|\| 2/);
   assert.equal(job.includes("one JSON object"), false);
   assert.match(job, /max_tokens: fitted\.output/);
   assert.match(job, /truncated to fit the context window/);

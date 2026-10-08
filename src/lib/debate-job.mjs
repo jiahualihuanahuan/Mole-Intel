@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Agent } from "undici";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 function loadDeskSecrets() {
@@ -98,6 +99,13 @@ const AGENTS = {
 // Two sequences at a time, so a 4096-token reply fits --gpu-memory-utilization 0.9 on a 10GB 3080.
 const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
 const MAX_OUTPUT = 4096;
+const LLM_WAIT_MS = 30 * 60 * 1000;
+const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 2));
+const llmAgent = new Agent({
+  headersTimeout: LLM_WAIT_MS,
+  bodyTimeout: LLM_WAIT_MS,
+  connectTimeout: 30_000,
+});
 
 function estimateTokens(text) {
   return Math.ceil(String(text || "").length / 2);
@@ -128,7 +136,8 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
       res = await fetch(`${BASE_URL}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(10 * 60 * 1000),
+        signal: AbortSignal.timeout(LLM_WAIT_MS),
+        dispatcher: llmAgent,
         body: JSON.stringify({
           model: MODEL,
           messages: [
@@ -1241,6 +1250,20 @@ function packetText(packet) {
   return text;
 }
 
+async function runPool(tasks, limit = LLM_CONCURRENCY) {
+  const results = new Array(tasks.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < tasks.length) {
+      const index = cursor++;
+      results[index] = await tasks[index]();
+    }
+  }
+  const workers = Math.min(limit, tasks.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
 function noteForJudge(seat) {
   if (!seat || seat.ok === false) return { ok: false, error: seat?.error || "no note" };
   const note = seat.note && typeof seat.note === "object" ? seat.note : {};
@@ -1266,14 +1289,14 @@ async function debateOne(ticker) {
   };
   // Agents run in parallel — they don't see each other.
   // Only the news seat gets the headlines.
-  const [bull, bear, valuation, macro, earnings, analyst, news] = await Promise.all([
-    ask("bull", deskPacket),
-    ask("bear", deskPacket),
-    ask("valuation", deskPacket),
-    ask("macro", deskPacket),
-    ask("earnings", deskPacket),
-    ask("analyst", deskPacket),
-    ask("news", newsPacket),
+  const [bull, bear, valuation, macro, earnings, analyst, news] = await runPool([
+    () => ask("bull", deskPacket),
+    () => ask("bear", deskPacket),
+    () => ask("valuation", deskPacket),
+    () => ask("macro", deskPacket),
+    () => ask("earnings", deskPacket),
+    () => ask("analyst", deskPacket),
+    () => ask("news", newsPacket),
   ]);
   const judge = await ask("judge", {
     ticker: symbol,
