@@ -1,6 +1,6 @@
 name: mole-intel
 
-# The web app and the midnight desk. vLLM is not in this file.
+# The web app and the 11pm desk. vLLM is not in this file.
 # It must already be running on the host at port 8000.
 services:
   web:
