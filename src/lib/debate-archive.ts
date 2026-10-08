@@ -7,7 +7,7 @@ export type ArchiveHit = {
   call: string;
 };
 
-const SEATS = ["bull", "bear", "valuation", "macro", "earnings", "analyst", "news"] as const;
+const SEATS = ["bull", "bear", "valuation", "earnings", "analyst", "news"] as const;
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";

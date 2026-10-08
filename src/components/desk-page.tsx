@@ -7,14 +7,13 @@ import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, SeatNo
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
-const SEAT_ORDER = ["news", "bull", "bear", "valuation", "macro", "earnings", "analyst"] as const;
+const SEAT_ORDER = ["news", "bull", "bear", "valuation", "earnings", "analyst"] as const;
 
 const SEAT_LABEL: Record<(typeof SEAT_ORDER)[number], string> = {
   news: "News",
   bull: "Bull",
   bear: "Bear",
   valuation: "Valuation",
-  macro: "Macro",
   earnings: "Earnings",
   analyst: "Analyst ratings",
 };
@@ -369,7 +368,7 @@ function Empty({
   return (
     <section className="pt-6">
       <p className="text-xs tracking-wide text-muted">The desk</p>
-      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Seven seats. One reads the news. The judge keeps the split.</h1>
+      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Six seats. One reads the news. The judge reads the macro tape.</h1>
       <p className="mt-4 max-w-xl text-base text-muted">
         Search a company, or start from the largest names, the bullish calls, and whatever just hit the wires.
       </p>
@@ -641,12 +640,6 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
         <p className="text-sm tabular-nums text-muted">Conviction {Math.round(note.conviction * 100)}</p>
       )}
       {note.summary && <Markdown text={note.summary} />}
-      {note.thinking && (
-        <details className="mt-4 max-w-3xl">
-          <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
-          <Markdown text={note.thinking} />
-        </details>
-      )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <PointList title="For" items={note.bullPoints} />
         <PointList title="Against" items={note.bearPoints} />
@@ -709,12 +702,6 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
       )}
       {note?.summary && <Markdown text={note.summary} />}
       {note?.argument && <Markdown text={note.argument} />}
-      {note?.thinking && (
-        <details className="mt-4 max-w-3xl">
-          <summary className="cursor-pointer text-xs text-muted">Thinking</summary>
-          <Markdown text={note.thinking} />
-        </details>
-      )}
       {note && note.points.length > 0 && (
         <ul className="mt-4 max-w-3xl list-disc space-y-2 pl-5">
           {note.points.map((point) => (

@@ -6,7 +6,7 @@
  * AlphaStreet). SearXNG is used when the homelab search box answers.
  * FRED and Finnhub are fallbacks only, and only for fields the public
  * sources missed. Finnhub's free plan has no price targets and no transcripts.
- * Seven seats write notes on vLLM, then the judge lists the disagreements.
+ * Six seats write notes on vLLM, then the judge lists the disagreements.
  * The news seat is the only one that receives the headlines.
  *
  * Env: LLM_BASE_URL, LLM_MODEL, MOLE_DATA, PYTHON, FRED_API_KEY, SEARXNG_URL,
@@ -74,13 +74,9 @@ const AGENTS = {
     role: "Valuation analyst",
     system: `You are the valuation analyst. Interpret the multiples in the packet (P/E, P/B, EV/EBITDA, FCF yield, ROE, margins) and the analyst price targets against the current price. Say what looks stretched or cheap. Treat a missing field as unknown, not zero. ${WRITE}`,
   },
-  macro: {
-    role: "Macro analyst",
-    system: `You are the macro analyst. Say whether the US rate, inflation, and growth backdrop is a tailwind or a headwind for this sector. packet.macro fields are fed_funds (NY Fed effective rate), fed_target, cpi_yoy (BLS year-over-year percent, not the index), unemployment, ten_year (Treasury yield), and payroll_change. A null field is unknown. Do not call the backdrop unavailable when those numbers are present. ${WRITE}`,
-  },
   judge: {
     role: "Judge",
-    system: `You are the judge. Read the other notes, including the news seat on how the headlines change the fundamentals. Write a long final note. Say whether the call is bullish, bearish, neutral, or mixed, and do not force the seats to agree. Spell out every disagreement that is still open. ${WRITE}`,
+    system: `You are the judge. There is no macro seat. Read macro in this packet yourself: fed_funds is the NY Fed effective rate, fed_target is the target range, cpi_yoy is the BLS year-over-year percent (not the index), unemployment, ten_year is the Treasury yield, and payroll_change. A null field is unknown. Do not call the backdrop unavailable when those numbers are present. Weigh that backdrop with the seat notes, including the news seat on how the headlines change the fundamentals. Write a long final note. Say whether the call is bullish, bearish, neutral, or mixed, and do not force the seats to agree. Spell out every disagreement that is still open. ${WRITE}`,
   },
   earnings: {
     role: "Earnings-call analyst",
@@ -234,16 +230,16 @@ function extractJson(raw) {
 
 async function ask(agentKey, packet) {
   const { system } = AGENTS[agentKey];
-  const { answer, thinking } = await chat(system, packetText(packet), { maxTokens: MAX_OUTPUT });
+  const { answer } = await chat(system, packetText(packet), { maxTokens: MAX_OUTPUT });
   const parsed = extractJson(answer);
   const shaped =
     parsed &&
     typeof parsed === "object" &&
     !Array.isArray(parsed) &&
     ["summary", "thesis", "call", "argument", "fundamental_impact", "verdict"].some((key) => parsed[key]);
-  if (shaped) return { agent: agentKey, ok: true, note: { ...parsed, thinking } };
+  if (shaped) return { agent: agentKey, ok: true, note: parsed };
   if (!answer) return { agent: agentKey, ok: false, error: "model returned nothing" };
-  return { agent: agentKey, ok: true, note: { argument: answer, thinking } };
+  return { agent: agentKey, ok: true, note: { argument: answer } };
 }
 
 // ---------- Data layer ----------
@@ -1312,11 +1308,10 @@ async function debateOne(ticker) {
   };
   // Agents run in parallel — they don't see each other.
   // Only the news seat gets the headlines.
-  const [bull, bear, valuation, macro, earnings, analyst, news] = await runPool([
+  const [bull, bear, valuation, earnings, analyst, news] = await runPool([
     () => ask("bull", deskPacket),
     () => ask("bear", deskPacket),
     () => ask("valuation", deskPacket),
-    () => ask("macro", deskPacket),
     () => ask("earnings", deskPacket),
     () => ask("analyst", deskPacket),
     () => ask("news", newsPacket),
@@ -1338,7 +1333,6 @@ async function debateOne(ticker) {
       bull: noteForJudge(bull),
       bear: noteForJudge(bear),
       valuation: noteForJudge(valuation),
-      macro: noteForJudge(macro),
       earnings: noteForJudge(earnings),
       analyst: noteForJudge(analyst),
       news: noteForJudge(news),
@@ -1351,7 +1345,7 @@ async function debateOne(ticker) {
     company: companySnapshot(packet.financials),
     news: headlines,
     feeds: packet.report,
-    agents: { bull, bear, valuation, macro, earnings, analyst, news },
+    agents: { bull, bear, valuation, earnings, analyst, news },
     judge,
   };
 }

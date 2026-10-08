@@ -1,6 +1,6 @@
 # Mole Intel
 
-A web desk for one ticker at a time. Opening a name shows the last note. If there is none, seven seats sit: bull, bear, valuation, macro, earnings, analyst ratings, and news. The news seat is the only one who reads the headlines. It summarizes them and says how they change the company's fundamentals. A judge writes the call and lists what they still do not agree on.
+A web desk for one ticker at a time. Opening a name shows the last note. If there is none, six seats sit: bull, bear, valuation, earnings, analyst ratings, and news. The news seat is the only one who reads the headlines. The judge reads the macro prints directly. It writes the call and lists what the seats still do not agree on.
 
 The page shows the company tape (price, multiples, market cap), the headlines those seats read, and the debate. Notes land in `data/debates.jsonl`.
 

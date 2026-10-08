@@ -43,7 +43,9 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /truncated to fit the context window/);
   assert.equal(job.includes("ask(\"bull\", packet)"), false);
   assert.match(page, /news: "News"/);
-  assert.match(page, /Seven seats/);
+  assert.match(page, /Six seats/);
+  assert.equal(job.includes("ask(\"macro\""), false);
+  assert.equal(page.includes("Thinking</summary>"), false);
   assert.match(archive, /"news"/);
   assert.match(archive, /fundamental_impact/);
 });
