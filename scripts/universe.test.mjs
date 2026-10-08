@@ -33,9 +33,11 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /ask\("news", newsPacket\)/);
   assert.match(job, /packet\.fundamentals/);
   assert.match(job, /qwen3\.5-4b-awq/);
+  assert.match(job, /65536/);
   assert.match(job, /enable_thinking: true/);
   assert.equal(job.includes("one JSON object"), false);
-  assert.match(job, /max_tokens: maxTokens/);
+  assert.match(job, /max_tokens: output/);
+  assert.match(job, /truncated to fit the context window/);
   assert.equal(job.includes("ask(\"bull\", packet)"), false);
   assert.match(page, /news: "News"/);
   assert.match(page, /Seven seats/);

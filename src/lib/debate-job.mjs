@@ -96,29 +96,47 @@ const AGENTS = {
 
 // ---------- LLM call (OpenAI-compatible: vLLM or Ollama) ----------
 
-async function chat(system, user, { maxTokens = 8192 } = {}) {
-  const res = await fetch(`${BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(10 * 60 * 1000),
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.6,
-      top_p: 0.95,
-      top_k: 20,
-      max_tokens: maxTokens,
-      chat_template_kwargs: { enable_thinking: true },
-    }),
-  });
-  const raw = await res.text();
-  if (!res.ok) throw new Error(`LLM ${res.status}: ${raw.replace(/\s+/g, " ").slice(0, 240)}`)
-  const payload = JSON.parse(raw);
-  const message = payload?.choices?.[0]?.message || {};
-  return splitThink(message.content || "", message.reasoning || message.reasoning_content || "");
+const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
+
+async function chat(system, user, { maxTokens = 4096 } = {}) {
+  let output = Math.min(maxTokens, CONTEXT - 2048);
+  let bodyUser = String(user || "");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const charBudget = Math.max(4000, (CONTEXT - output - 512) * 2);
+    const payloadUser =
+      bodyUser.length > charBudget ? `${bodyUser.slice(0, charBudget)}\n[truncated to fit the context window]` : bodyUser;
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: payloadUser },
+        ],
+        temperature: 0.6,
+        top_p: 0.95,
+        top_k: 20,
+        max_tokens: output,
+        chat_template_kwargs: { enable_thinking: true },
+      }),
+    });
+    const raw = await res.text();
+    if (res.ok) {
+      const payload = JSON.parse(raw);
+      const message = payload?.choices?.[0]?.message || {};
+      return splitThink(message.content || "", message.reasoning || message.reasoning_content || "");
+    }
+    const tooLong = res.status === 400 && /maximum context length|reduce the length/i.test(raw);
+    if (tooLong && attempt < 2) {
+      output = Math.max(1024, Math.floor(output / 2));
+      bodyUser = bodyUser.slice(0, Math.floor(bodyUser.length * 0.6));
+      continue;
+    }
+    throw new Error(`LLM ${res.status}: ${raw.replace(/\s+/g, " ").slice(0, 240)}`);
+  }
+  throw new Error("LLM request did not fit the context window");
 }
 
 function splitThink(content, sideReasoning) {
@@ -160,7 +178,7 @@ function extractJson(raw) {
 
 async function ask(agentKey, packet) {
   const { system } = AGENTS[agentKey];
-  const { answer, thinking } = await chat(system, JSON.stringify(packet), { maxTokens: 8192 });
+  const { answer, thinking } = await chat(system, packetText(packet), { maxTokens: 8192 });
   const parsed = extractJson(answer);
   const shaped =
     parsed &&
@@ -1177,6 +1195,37 @@ function companySnapshot(row) {
 
 // ---------- Debate ----------
 
+function shrinkStrings(value, maxLen) {
+  if (typeof value === "string") return value.length > maxLen ? value.slice(0, maxLen) : value;
+  if (Array.isArray(value)) return value.map((item) => shrinkStrings(item, maxLen));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = shrinkStrings(item, maxLen);
+    return out;
+  }
+  return value;
+}
+
+function packetText(packet) {
+  let text = JSON.stringify(packet);
+  let cap = 6000;
+  while (text.length > 48000 && cap >= 500) {
+    text = JSON.stringify(shrinkStrings(packet, cap));
+    cap = Math.floor(cap / 2);
+  }
+  if (text.length > 48000) text = `${text.slice(0, 48000)}\n[truncated to fit the context window]`;
+  return text;
+}
+
+function noteForJudge(seat) {
+  if (!seat || seat.ok === false) return { ok: false, error: seat?.error || "no note" };
+  const note = seat.note && typeof seat.note === "object" ? seat.note : {};
+  const text = [note.argument, note.summary, note.thesis, note.fundamental_impact, note.verdict]
+    .filter((part) => typeof part === "string" && part.trim())
+    .join("\n\n");
+  return { ok: true, note: text.slice(0, 6000) || "This seat did not write a note." };
+}
+
 async function debateOne(ticker) {
   const symbol = normalizeYahooTicker(ticker);
   const packet = await buildPacket(symbol);
@@ -1206,16 +1255,24 @@ async function debateOne(ticker) {
     ticker: symbol,
     packet_summary: {
       ticker: packet.ticker,
-      financials: packet.financials,
+      financials: companySnapshot(packet.financials),
       macro: packet.macro,
       news_count: (headlines || []).length,
       earnings_calls_found: (packet.earnings_calls || []).length,
-      earnings_results: packet.earnings_results || [],
+      earnings_results: (packet.earnings_results || []).slice(0, 4),
       has_finnhub: packet.analyst?.source === "finnhub",
       analyst_source: packet.analyst?.source || "none",
       feed_note: packet.report?.note || "",
     },
-    agents: { bull, bear, valuation, macro, earnings, analyst, news },
+    agents: {
+      bull: noteForJudge(bull),
+      bear: noteForJudge(bear),
+      valuation: noteForJudge(valuation),
+      macro: noteForJudge(macro),
+      earnings: noteForJudge(earnings),
+      analyst: noteForJudge(analyst),
+      news: noteForJudge(news),
+    },
   });
   return {
     ticker: symbol,
