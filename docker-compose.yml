@@ -1,21 +1,19 @@
 name: mole-intel
 
-# The web app and the 11pm desk. vLLM is not in this file.
-# It must already be running on the host at port 8000.
+# The web app and the 11pm desk. vLLM is a separate compose file.
+# Both services use the host network so they can call 127.0.0.1:8000,
+# which is the port vLLM publishes. Do not add a ports: block with host network.
 services:
   web:
     build: .
-    ports:
-      - "8090:8090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     environment:
       HOST: 0.0.0.0
       PORT: "8090"
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://host.docker.internal:8000/v1
+      LLM_BASE_URL: http://127.0.0.1:8000/v1
       LLM_MODEL: qwen3.5-4b-awq
       LLM_CONTEXT: "32768"
       SEARXNG_URL: http://192.168.86.35:8099
@@ -39,14 +37,13 @@ services:
 
   desk:
     build: .
+    network_mode: host
     command: ["bash", "/app/scripts/desk.sh"]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://host.docker.internal:8000/v1
+      LLM_BASE_URL: http://127.0.0.1:8000/v1
       LLM_MODEL: qwen3.5-4b-awq
       LLM_CONTEXT: "32768"
       SEARXNG_URL: http://192.168.86.35:8099
