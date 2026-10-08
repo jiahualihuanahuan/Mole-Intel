@@ -21,6 +21,11 @@ test("desk waits for 11pm and does not set a power limit", () => {
   assert.equal(desk.includes("tomorrow 00:00"), false);
 });
 
+test("desk image includes the ticker module the job imports", () => {
+  const docker = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(docker, /yahoo-ticker\.mjs/);
+});
+
 test("desk runs the whole universe each night", () => {
   assert.match(desk, /whole universe/);
   assert.equal(desk.includes("BATCH_LIMIT:-500"), false);
