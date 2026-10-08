@@ -94,10 +94,10 @@ const AGENTS = {
   },
 }
 
-// Sequence cap for vLLM --max-model-len 65536.
+// Sequence cap for vLLM --max-model-len 32768.
 // Seven seats run at once, so the reply stays at 4096 tokens.
 // That parallel load fits --gpu-memory-utilization 0.9 on a 10GB 3080.
-const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
+const CONTEXT = Number(process.env.LLM_CONTEXT || 32768);
 const MAX_OUTPUT = 4096;
 
 function estimateTokens(text) {
