@@ -328,11 +328,11 @@ export function fiscalRank(title) {
 function decodeHtml(value) {
   return String(value)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&|&#0*38;/g, "&")
-    .replace(/<|&#0*60;/g, "<")
-    .replace(/>|&#0*62;/g, ">")
-    .replace(/"|&#0*34;/g, '"')
-    .replace(/&#8217;|&#039;|&#39;|'/g, "'")
+    .replace(/&amp;|&#0*38;/g, "&")
+    .replace(/&lt;|&#0*60;/g, "<")
+    .replace(/&gt;|&#0*62;/g, ">")
+    .replace(/&quot;|&#0*34;/g, '"')
+    .replace(/&#8217;|&#039;|&#39;|&apos;/g, "'")
     .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;/g, '"')
     .replace(/&#8211;|&ndash;/g, "-")
     .replace(/&nbsp;|&#160;/g, " ")
@@ -724,7 +724,7 @@ export function transcriptLinksFromHtml(html) {
   const pattern = /<a[^>]+href="(https:\/\/news\.alphastreet\.com\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let match;
   while ((match = pattern.exec(String(html)))) {
-    const url = match[1].replace(/&/g, "&");
+    const url = match[1].replace(/&amp;/g, "&");
     const title = decodeHtml(match[2].replace(/<[^>]+>/g, " "));
     if (!/earnings call transcript/i.test(title)) continue;
     if (seen.has(url)) continue;
