@@ -16,6 +16,7 @@ test("displayed notes drop the thinking process", () => {
   const note = finalNote("<think>scratch this</think>\n**Thinking Process:**\nThe multiple might be high.\n\n**Final answer:**\nThe shares look expensive at 50 times earnings.");
   assert.equal(note.includes("scratch"), false);
   assert.equal(note.includes("Thinking"), false);
+  assert.equal(note.includes("**"), false);
   assert.match(note, /expensive at 50 times earnings/);
 });
 

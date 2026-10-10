@@ -11,6 +11,6 @@ export function finalNote(raw) {
     /^\s*(?:#{1,3}\s*)?(?:\*\*|__)?(?:thinking(?:\s+process)?|reasoning|chain of thought)(?:\*\*|__)?\s*:?\s*\n[\s\S]*?(?=\n\s*(?:#{1,3}\s+\S|\*\*[^*\n]+\*\*))/i,
     "",
   );
-  text = text.replace(/^\s*(?:#{1,3}\s*)?(?:\*\*|__)?(?:final(?:\s+\w+){0,2}|conclusion)(?:\*\*|__)?\s*:?\s*/i, "");
+  text = text.replace(/^\s*(?:#{1,3}\s*)?(?:\*\*|__)?(?:final(?:\s+\w+){0,2}|conclusion)\s*:?\s*(?:\*\*|__)?\s*/i, "");
   return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
