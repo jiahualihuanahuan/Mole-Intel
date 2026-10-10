@@ -19,6 +19,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { finalNote } from "./final-note.mjs";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 function loadDeskSecrets() {
@@ -59,7 +60,7 @@ const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
 const EARNINGS_CALLS = Math.max(1, Math.min(6, Number(process.env.EARNINGS_CALLS || 3)));
 
 const WRITE =
-  "Think through the packet first, then write the note in plain prose. Take as much length as the evidence needs. Do not use JSON or a fixed schema. Use only facts in the packet. Never invent numbers. If something is missing, say it is unknown.";
+  "Write only the finished note. Do not include a thinking process, a draft, or a section titled Thinking. Take as much length as the evidence needs. Do not use JSON or a fixed schema. Use only facts in the packet. Never invent numbers. If something is missing, say it is unknown.";
 
 const AGENTS = {
   bull: {
@@ -168,7 +169,8 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
         top_p: 0.95,
         top_k: 20,
         max_tokens: fitted.output,
-        chat_template_kwargs: { enable_thinking: true },
+        think: false,
+        chat_template_kwargs: { enable_thinking: false },
       });
     } catch (error) {
       const cause = error?.cause;
@@ -179,7 +181,7 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
     if (res.ok) {
       const payload = JSON.parse(raw);
       const message = payload?.choices?.[0]?.message || {};
-      return splitThink(message.content || "", message.reasoning || message.reasoning_content || "");
+      return { answer: finalNote(message.content || ""), thinking: "" };
     }
     const tooLong = res.status === 400 && /maximum context length|reduce the length/i.test(raw);
     if (tooLong && attempt < 2) {

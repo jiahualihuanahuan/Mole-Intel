@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
 import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
 import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { finalNote } from "@/lib/final-note.mjs";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
@@ -736,7 +737,7 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
 }
 
 function Markdown({ text }: { text: string }) {
-  const blocks = parseMarkdown(text);
+  const blocks = parseMarkdown(finalNote(text));
   if (blocks.length === 0) return null;
   return (
     <div className="mt-3 max-w-3xl space-y-3 text-sm leading-relaxed">

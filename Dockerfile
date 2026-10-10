@@ -22,6 +22,7 @@ ENV PYTHON=/opt/yf/bin/python
 ENV TZ=America/Toronto
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/src/lib/debate-job.mjs ./src/lib/debate-job.mjs
+COPY --from=build /app/src/lib/final-note.mjs ./src/lib/final-note.mjs
 COPY --from=build /app/src/lib/yahoo-ticker.mjs ./src/lib/yahoo-ticker.mjs
 COPY --from=build /app/src/data/universe.ts ./src/data/universe.ts
 COPY scripts/debate-batch.mjs ./scripts/debate-batch.mjs

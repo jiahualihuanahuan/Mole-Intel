@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { finalNote } from "../src/lib/final-note.mjs";
 import {
   cpiYoyFromBls,
   effrFromNyFed,
@@ -10,6 +11,13 @@ import {
   transcriptLinksFromHtml,
   multiplesFromFigures,
 } from "../src/lib/debate-job.mjs";
+
+test("displayed notes drop the thinking process", () => {
+  const note = finalNote("<think>scratch this</think>\n**Thinking Process:**\nThe multiple might be high.\n\n**Final answer:**\nThe shares look expensive at 50 times earnings.");
+  assert.equal(note.includes("scratch"), false);
+  assert.equal(note.includes("Thinking"), false);
+  assert.match(note, /expensive at 50 times earnings/);
+});
 
 test("valuation multiples come from the published P/E and the statements", () => {
   const multiples = multiplesFromFigures({

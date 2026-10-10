@@ -24,6 +24,7 @@ test("desk waits for 11pm and does not set a power limit", () => {
 test("desk image includes the ticker module the job imports", () => {
   const docker = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(docker, /yahoo-ticker\.mjs/);
+  assert.match(docker, /final-note\.mjs/);
 });
 
 test("news seat is sent to the model and shown on the page", () => {

@@ -109,7 +109,7 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     points,
     verdict: str(note.verdict),
     confidence: num(note.confidence),
-    thinking: str(note.thinking),
+    thinking: "",
   };
 }
 
@@ -142,7 +142,7 @@ function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
     bearPoints: lines(note.bear_points ?? note.bearPoints, 5),
     disagreements,
     openQuestions: lines(note.open_questions ?? note.openQuestions, 4),
-    thinking: str(note.thinking),
+    thinking: "",
   };
 }
 
