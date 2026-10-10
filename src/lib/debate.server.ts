@@ -1,8 +1,8 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, FeedReport, Headline, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, FeedReport, Headline, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 function finite(value: unknown): number | null {
@@ -253,6 +253,88 @@ export async function readFeeds(ticker: string): Promise<FeedReport> {
     sourceReport: (ticker: string) => Promise<FeedReport>;
   };
   return job.sourceReport(symbol);
+}
+
+const SECTIONS = ["news", "bull", "bear", "valuation", "earnings", "analyst", "judge"] as const;
+
+function noteHolder(agent: unknown): Record<string, unknown> | null {
+  if (!agent || typeof agent !== "object" || Array.isArray(agent)) return null;
+  const row = agent as Record<string, unknown>;
+  if (row.note && typeof row.note === "object" && !Array.isArray(row.note)) return row.note as Record<string, unknown>;
+  return row;
+}
+
+function latestRecord(ticker: string): Record<string, unknown> | null {
+  const symbol = normalizeYahooTicker(ticker);
+  let found: Record<string, unknown> | null = null;
+  for (const record of readArchiveRecords()) {
+    const hit = hitFromRecord(record);
+    if (hit?.ticker === symbol && record && typeof record === "object") found = record as Record<string, unknown>;
+  }
+  return found;
+}
+
+function appendRecord(record: Record<string, unknown>) {
+  appendFileSync(archiveFile(), `${JSON.stringify(record)}\n`);
+}
+
+export async function translateStoredSection(ticker: string, section: string): Promise<SeatZh | JudgeZh | null> {
+  if (!SECTIONS.includes(section as (typeof SECTIONS)[number])) return null;
+  const record = latestRecord(ticker);
+  if (!record) return null;
+  const debate = debateFromRecord(record);
+  if (!debate) return null;
+  if (section === "judge") {
+    const ready = debate.judge?.zh;
+    if (ready?.summary || ready?.bullPoints.length || ready?.bearPoints.length || ready?.disagreements.length || ready?.openQuestions.length) return ready;
+    const judge = debate.judge;
+    if (!judge) return null;
+    const { translateText } = await import("./translate.mjs");
+    const zh: JudgeZh = {
+      summary: judge.summary ? await translateText(judge.summary) : "",
+      bullPoints: [],
+      bearPoints: [],
+      disagreements: [],
+      openQuestions: [],
+    };
+    for (const point of judge.bullPoints) zh.bullPoints.push(await translateText(point));
+    for (const point of judge.bearPoints) zh.bearPoints.push(await translateText(point));
+    for (const row of judge.disagreements) {
+      zh.disagreements.push({
+        topic: row.topic ? await translateText(row.topic) : "",
+        bull: row.bull ? await translateText(row.bull) : "",
+        bear: row.bear ? await translateText(row.bear) : "",
+      });
+    }
+    for (const question of judge.openQuestions) zh.openQuestions.push(await translateText(question));
+    const holder = noteHolder(record.judge) ?? record;
+    holder.zh = {
+      summary: zh.summary,
+      bullPoints: zh.bullPoints,
+      bearPoints: zh.bearPoints,
+      disagreements: zh.disagreements.map((row) => ({ topic: row.topic, bull_view: row.bull, bear_view: row.bear })),
+      openQuestions: zh.openQuestions,
+    };
+    appendRecord(record);
+    return zh;
+  }
+  const seat = debate.seats[section];
+  if (!seat) return null;
+  if (seat.zh && (seat.zh.summary || seat.zh.argument || seat.zh.points.length || seat.zh.verdict)) return seat.zh;
+  const { translateText } = await import("./translate.mjs");
+  const zh: SeatZh = {
+    summary: seat.summary ? await translateText(seat.summary) : "",
+    argument: seat.argument ? await translateText(seat.argument) : "",
+    points: [],
+    verdict: seat.verdict ? await translateText(seat.verdict) : "",
+  };
+  for (const point of seat.points) zh.points.push(await translateText(point));
+  const agents = (record.agents && typeof record.agents === "object" ? record.agents : {}) as Record<string, unknown>;
+  record.agents = agents;
+  const holder = noteHolder(agents[section]);
+  if (holder) holder.zh = zh;
+  appendRecord(record);
+  return zh;
 }
 
 export async function runDebate(ticker: string): Promise<DebateResult> {

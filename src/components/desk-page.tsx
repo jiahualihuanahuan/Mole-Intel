@@ -2,10 +2,10 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn, translateFn } from "@/lib/debate.functions";
-import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
+import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn, translateSectionFn } from "@/lib/debate.functions";
+import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, JudgeZh, SeatNote, SeatZh, Tape } from "@/lib/debate-types";
 import { finalNote } from "@/lib/final-note.mjs";
-import { callName, useI18n } from "@/lib/i18n";
+import { callName, useI18n, type CopyKey } from "@/lib/i18n";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
@@ -552,61 +552,72 @@ function Fact({
   );
 }
 
-function collectNote(note: SeatNote | null): string[] {
-  if (!note) return [];
-  return [note.summary, note.argument, note.verdict, ...note.points].filter((text) => text.trim());
+function seatReady(zh: SeatZh | undefined): boolean {
+  return Boolean(zh && (zh.summary || zh.argument || zh.points.length || zh.verdict));
 }
 
-function collectJudge(note: JudgeNote | null): string[] {
-  if (!note) return [];
-  return [
-    note.summary,
-    ...note.bullPoints,
-    ...note.bearPoints,
-    ...note.openQuestions,
-    ...note.disagreements.flatMap((row) => [row.topic, row.bull, row.bear]),
-  ].filter((text) => text.trim());
+function shownSeat(note: SeatNote | null, extra: SeatZh | JudgeZh | undefined, lang: string): SeatNote | null {
+  if (!note || lang !== "zh") return note;
+  const zh = seatReady(extra as SeatZh | undefined) ? (extra as SeatZh) : note.zh;
+  if (!zh || !seatReady(zh)) return note;
+  return { ...note, summary: zh.summary, argument: zh.argument, points: zh.points, verdict: zh.verdict };
+}
+
+function shownJudge(note: JudgeNote | null, extra: SeatZh | JudgeZh | undefined, lang: string): JudgeNote | null {
+  if (!note || lang !== "zh") return note;
+  const zh = judgeReady(extra as JudgeZh | undefined) ? (extra as JudgeZh) : note.zh;
+  if (!zh || !judgeReady(zh)) return note;
+  return {
+    ...note,
+    summary: zh.summary,
+    bullPoints: zh.bullPoints,
+    bearPoints: zh.bearPoints,
+    disagreements: zh.disagreements,
+    openQuestions: zh.openQuestions,
+  };
+}
+
+function judgeReady(zh: JudgeZh | undefined): boolean {
+  return Boolean(zh && (zh.summary || zh.bullPoints.length || zh.bearPoints.length || zh.disagreements.length || zh.openQuestions.length));
 }
 
 function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
   const { lang, t } = useI18n();
-  const translate = useServerFn(translateFn);
-  const texts = useMemo(() => {
-    const rows = SEAT_ORDER.flatMap((key) => collectNote(debate.seats[key] ?? null));
-    return [...rows, ...collectJudge(debate.judge)].filter((text, index, all) => all.indexOf(text) === index);
-  }, [debate]);
-  const [map, setMap] = useState<Record<string, string> | null>(null);
+  const translate = useServerFn(translateSectionFn);
+  const [extra, setExtra] = useState<Record<string, SeatZh | JudgeZh>>({});
+  const [current, setCurrent] = useState("");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (lang !== "zh") {
-      setMap(null);
+      setCurrent("");
       setFailed(false);
       return;
     }
     let cancel = false;
-    setMap(null);
-    setFailed(false);
-    translate({ data: { texts } })
-      .then((translated) => {
+    const sections = ["judge", ...SEAT_ORDER] as const;
+    (async () => {
+      for (const section of sections) {
         if (cancel) return;
-        const next: Record<string, string> = {};
-        texts.forEach((text, index) => {
-          next[text] = translated[index] || text;
-        });
-        setMap(next);
-      })
-      .catch(() => {
-        if (!cancel) setFailed(true);
-      });
+        const stored = section === "judge" ? debate.judge?.zh : debate.seats[section]?.zh;
+        const ready = section === "judge" ? judgeReady(stored as JudgeZh | undefined) : seatReady(stored as SeatZh | undefined);
+        if (ready) continue;
+        const hasEnglish = section === "judge" ? Boolean(debate.judge) : Boolean(debate.seats[section]);
+        if (!hasEnglish) continue;
+        setCurrent(section);
+        try {
+          const zh = await translate({ data: { ticker: debate.ticker, section } });
+          if (cancel || !zh) continue;
+          setExtra((prev) => ({ ...prev, [section]: zh }));
+        } catch {
+          if (!cancel) setFailed(true);
+        }
+      }
+      if (!cancel) setCurrent("");
+    })();
     return () => {
       cancel = true;
     };
-  }, [lang, debate.ticker, debate.asOf, texts]);
-  const show = (text: string) => {
-    if (lang !== "zh" || failed) return text;
-    if (!map) return "";
-    return map[text] ?? text;
-  };
+  }, [lang, debate.ticker, debate.asOf]);
   const archived: Headline[] = debate.news.length
     ? debate.news
     : debate.tape.stories?.length
@@ -618,18 +629,21 @@ function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
     const hit = byTitle.get(item.title);
     return hit?.url ? { ...item, url: hit.url, source: item.source || hit.source } : item;
   });
+  const judgeNote = shownJudge(debate.judge, extra.judge, lang);
   return (
-    <ShowContext.Provider value={show}>
+    <ShowContext.Provider value={(text) => text}>
       <div className="mt-8 space-y-8">
-        {lang === "zh" && !map && !failed && <p className="text-sm text-muted">{t("translating")}</p>}
+        {lang === "zh" && current && (
+          <p className="text-sm text-muted">{t("translatingSection")} {t(current as CopyKey)}</p>
+        )}
         {failed && <p className="text-sm text-accent">{t("translateFailed")}</p>}
         {debate.company && <CompanySheet info={debate.company} />}
-        {debate.judge && <Judge note={debate.judge} model={debate.model} />}
+        {judgeNote && <Judge note={judgeNote} model={debate.model} />}
         <section>
           <h2 className="text-xs tracking-wide text-muted">{t("seats")}</h2>
           <div className="mt-3 space-y-3">
             {SEAT_ORDER.map((key) => (
-              <Seat key={key} note={debate.seats[key] ?? null} seatKey={key} wires={key === "news" ? wires : undefined} />
+              <Seat key={key} note={shownSeat(debate.seats[key] ?? null, extra[key], lang)} seatKey={key} wires={key === "news" ? wires : undefined} />
             ))}
           </div>
         </section>

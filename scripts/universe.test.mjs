@@ -25,6 +25,7 @@ test("desk image includes the ticker module the job imports", () => {
   const docker = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(docker, /yahoo-ticker\.mjs/);
   assert.match(docker, /final-note\.mjs/);
+  assert.match(docker, /translate\.mjs/);
 });
 
 test("news seat is sent to the model and shown on the page", () => {
@@ -48,7 +49,7 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(i18n, /news: "新闻"/);
   assert.match(i18n, /Six seats/);
   assert.match(page, /setLang\(lang === "en" \? "zh" : "en"\)/);
-  assert.match(page, /translateFn/);
+  assert.match(page, /translateSectionFn/);
   assert.equal(job.includes("ask(\"macro\""), false);
   assert.equal(page.includes("Thinking</summary>"), false);
   assert.match(archive, /"news"/);

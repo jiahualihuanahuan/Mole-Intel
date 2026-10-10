@@ -1,4 +1,4 @@
-import type { CompanyInfo, DebateResult, Disagreement, FeedReport, Headline, JudgeNote, SeatNote } from "@/lib/debate-types";
+import type { CompanyInfo, DebateResult, Disagreement, FeedReport, Headline, JudgeNote, JudgeZh, SeatNote, SeatZh } from "@/lib/debate-types";
 import { normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
 
 export type ArchiveHit = {
@@ -70,6 +70,20 @@ function unwrap(agent: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function seatZh(note: Record<string, unknown>): SeatZh | undefined {
+  const raw = note.zh;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as Record<string, unknown>;
+  const summary = str(row.summary) || str(row.thesis);
+  const argument = [str(row.argument), str(row.fundamental_impact) || str(row.fundamentalImpact), str(row.impact)]
+    .filter(Boolean)
+    .join("\n");
+  const points = lines(row.points, 8);
+  const verdict = str(row.verdict);
+  if (!summary && !argument && !points.length && !verdict) return undefined;
+  return { summary, argument, points, verdict };
+}
+
 function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
   const recent = note.most_recent;
   const recentObj = recent && typeof recent === "object" ? (recent as Record<string, unknown>) : null;
@@ -110,7 +124,37 @@ function seatFromNote(title: string, note: Record<string, unknown>): SeatNote {
     verdict: str(note.verdict),
     confidence: num(note.confidence),
     thinking: "",
+    zh: seatZh(note),
   };
+}
+
+function judgeZh(note: Record<string, unknown>): JudgeZh | undefined {
+  const raw = note.zh;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as Record<string, unknown>;
+  const summary = [str(row.summary), str(row.argument)].filter(Boolean).join("\n\n");
+  const disagreements: Disagreement[] = [];
+  if (Array.isArray(row.disagreements)) {
+    for (const item of row.disagreements) {
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      const topic = str(entry.topic);
+      const bull = str(entry.bull_view ?? entry.bullView ?? entry.bull);
+      const bear = str(entry.bear_view ?? entry.bearView ?? entry.bear);
+      if (!topic && !bull && !bear) continue;
+      disagreements.push({ topic: topic || "未决", bull, bear });
+      if (disagreements.length >= 5) break;
+    }
+  }
+  const zh = {
+    summary,
+    bullPoints: lines(row.bull_points ?? row.bullPoints, 5),
+    bearPoints: lines(row.bear_points ?? row.bearPoints, 5),
+    disagreements,
+    openQuestions: lines(row.open_questions ?? row.openQuestions, 4),
+  };
+  if (!zh.summary && !zh.bullPoints.length && !zh.bearPoints.length && !zh.disagreements.length && !zh.openQuestions.length) return undefined;
+  return zh;
 }
 
 function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
@@ -143,6 +187,7 @@ function judgeFromNote(note: Record<string, unknown> | null): JudgeNote | null {
     disagreements,
     openQuestions: lines(note.open_questions ?? note.openQuestions, 4),
     thinking: "",
+    zh: judgeZh(note),
   };
 }
 

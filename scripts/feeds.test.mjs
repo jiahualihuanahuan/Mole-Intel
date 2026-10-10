@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { finalNote } from "../src/lib/final-note.mjs";
+import { splitChunks } from "../src/lib/translate.mjs";
 import {
   cpiYoyFromBls,
   effrFromNyFed,
@@ -11,6 +12,13 @@ import {
   transcriptLinksFromHtml,
   multiplesFromFigures,
 } from "../src/lib/debate-job.mjs";
+
+test("a long note is translated in short pieces", () => {
+  const chunks = splitChunks(`${"A".repeat(800)}. ${"B".repeat(800)}`, 1000);
+  assert.equal(chunks.length, 2);
+  assert.ok(chunks[0].length <= 1000);
+  assert.ok(chunks[1].startsWith("B"));
+});
 
 test("displayed notes drop the thinking process", () => {
   const note = finalNote("<think>scratch this</think>\n**Thinking Process:**\nThe multiple might be high.\n\n**Final answer:**\nThe shares look expensive at 50 times earnings.");

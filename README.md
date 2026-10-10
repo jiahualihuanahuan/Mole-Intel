@@ -15,7 +15,7 @@ git pull
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:8090`. The header toggle switches the site between English and Simplified Chinese. Chinese notes are translated by the same Ollama model the first time you open them, then kept in `data/translations.jsonl`.
+Open `http://127.0.0.1:8090`. The header toggle switches the site between English and Simplified Chinese. A new desk run stores both languages. An older note is translated one section at a time, and each finished section is saved.
 
 Optional keys, before compose:
 

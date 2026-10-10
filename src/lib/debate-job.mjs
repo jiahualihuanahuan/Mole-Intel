@@ -20,6 +20,7 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { finalNote } from "./final-note.mjs";
+import { translateText } from "./translate.mjs";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 function loadDeskSecrets() {
@@ -1407,6 +1408,52 @@ function noteForJudge(seat) {
   return { ok: true, note: text.slice(0, 6000) || "This seat did not write a note." };
 }
 
+async function stampZh(seat) {
+  if (!seat?.ok || !seat.note || typeof seat.note !== "object") return seat;
+  const note = seat.note;
+  const zh = {};
+  for (const key of ["summary", "thesis", "argument", "fundamental_impact", "verdict"]) {
+    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await translateText(note[key]);
+  }
+  if (Array.isArray(note.points)) {
+    zh.points = [];
+    for (const point of note.points) {
+      if (typeof point === "string" && point.trim()) zh.points.push(await translateText(point));
+    }
+  }
+  note.zh = zh;
+  return seat;
+}
+
+async function stampJudgeZh(judge) {
+  const note = judge?.note && typeof judge.note === "object" ? judge.note : judge?.ok !== false ? judge : null;
+  if (!note || typeof note !== "object") return judge;
+  const zh = {};
+  for (const key of ["summary", "argument", "verdict"]) {
+    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await translateText(note[key]);
+  }
+  for (const key of ["bull_points", "bullPoints", "bear_points", "bearPoints", "open_questions", "openQuestions"]) {
+    if (!Array.isArray(note[key])) continue;
+    zh[key] = [];
+    for (const item of note[key]) {
+      if (typeof item === "string" && item.trim()) zh[key].push(await translateText(item));
+    }
+  }
+  if (Array.isArray(note.disagreements)) {
+    zh.disagreements = [];
+    for (const row of note.disagreements) {
+      if (!row || typeof row !== "object") continue;
+      zh.disagreements.push({
+        topic: row.topic ? await translateText(String(row.topic)) : "",
+        bull_view: row.bull_view || row.bullView ? await translateText(String(row.bull_view || row.bullView)) : "",
+        bear_view: row.bear_view || row.bearView ? await translateText(String(row.bear_view || row.bearView)) : "",
+      });
+    }
+  }
+  note.zh = zh;
+  return judge;
+}
+
 async function debateOne(ticker) {
   const symbol = normalizeYahooTicker(ticker);
   const packet = await buildPacket(symbol);
@@ -1453,6 +1500,25 @@ async function debateOne(ticker) {
       news: noteForJudge(news),
     },
   });
+  for (const [label, seat] of [
+    ["news", news],
+    ["bull", bull],
+    ["bear", bear],
+    ["valuation", valuation],
+    ["earnings", earnings],
+    ["analyst", analyst],
+  ]) {
+    try {
+      await stampZh(seat);
+    } catch (error) {
+      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  try {
+    await stampJudgeZh(judge);
+  } catch (error) {
+    console.error(`ZH ${symbol} judge: ${error instanceof Error ? error.message : error}`);
+  }
   return {
     ticker: symbol,
     as_of: packet.as_of,

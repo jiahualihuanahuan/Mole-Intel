@@ -64,6 +64,13 @@ export type CompanyInfo = {
   return3mPct: number | null;
 };
 
+export type SeatZh = {
+  summary: string;
+  argument: string;
+  points: string[];
+  verdict: string;
+};
+
 export type SeatNote = {
   title: string;
   summary: string;
@@ -72,6 +79,7 @@ export type SeatNote = {
   verdict: string;
   confidence: number | null;
   thinking: string;
+  zh?: SeatZh;
 };
 
 export type Disagreement = {
@@ -94,6 +102,14 @@ export type DeskBoards = {
   news: BoardRow[];
 };
 
+export type JudgeZh = {
+  summary: string;
+  bullPoints: string[];
+  bearPoints: string[];
+  disagreements: Disagreement[];
+  openQuestions: string[];
+};
+
 export type JudgeNote = {
   call: "bullish" | "bearish" | "neutral" | "mixed";
   conviction: number | null;
@@ -103,6 +119,7 @@ export type JudgeNote = {
   disagreements: Disagreement[];
   openQuestions: string[];
   thinking: string;
+  zh?: JudgeZh;
 };
 
 export type DebateResult = {
