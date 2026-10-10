@@ -1,8 +1,8 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, FeedReport, Headline, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, DeskRun, FeedReport, Headline, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 function finite(value: unknown): number | null {
@@ -337,41 +337,68 @@ export async function translateStoredSection(ticker: string, section: string): P
   return zh;
 }
 
-export async function runDebate(ticker: string): Promise<DebateResult> {
+const deskRuns = new Set<string>();
+
+function runPath(ticker: string) {
+  return path.join(path.dirname(archiveFile()), "runs", `${ticker.replace(/[^A-Za-z0-9.-]/g, "_")}.json`);
+}
+
+function writeRun(run: DeskRun) {
+  const file = runPath(run.ticker);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(run));
+}
+
+export function readDeskRun(ticker: string): DeskRun | null {
   const symbol = normalizeYahooTicker(ticker);
-  const job = (await import("./debate-job.mjs")) as {
-    debateOne: (ticker: string, options?: { bilingual?: boolean }) => Promise<unknown>;
-    archive: (result: unknown) => void;
-    attachChinese: (result: unknown) => Promise<unknown>;
-  };
-  const [record, tape] = await Promise.all([
-    job.debateOne(symbol, { bilingual: false }),
-    readTape(symbol).catch(() => null),
-  ]);
-  const debate = debateFromRecord(record);
-  if (!debate) throw new Error("The desk wrote a note the page could not read.");
   try {
-    job.archive(record);
-  } catch (error) {
-    debate.errors.push(`archive: ${error instanceof Error ? error.message : "could not write debates.jsonl"}`);
+    const run = JSON.parse(readFileSync(runPath(symbol), "utf8")) as DeskRun;
+    if (!run || run.ticker !== symbol) return null;
+    if (run.state === "running" && !deskRuns.has(symbol)) return null;
+    return run;
+  } catch {
+    return null;
   }
-  void job.attachChinese(record).then(() => {
-    try {
-      job.archive(record);
-    } catch (error) {
-      console.error(`ZH archive ${symbol}: ${error instanceof Error ? error.message : error}`);
-    }
-  });
-  const known = findCompany(symbol);
-  debate.name = known?.name ?? tape?.name ?? symbol;
-  debate.sector = debate.company?.sector || known?.sector || "Unlisted";
-  debate.indexName = known?.index ?? "Tape";
-  debate.source = "desk";
-  debate.model = process.env.LLM_MODEL || "qwen3.5:9b";
-  if (tape) {
-    const archivedHeads = debate.tape.headlines;
-    debate.tape = tape;
-    if (archivedHeads.length) debate.tape.headlines = archivedHeads;
-  } else debate.tape.name = debate.name;
-  return debate;
+}
+
+async function finishDebate(symbol: string, started: string) {
+  try {
+    const job = (await import("./debate-job.mjs")) as {
+      debateOne: (ticker: string, options?: { bilingual?: boolean }) => Promise<unknown>;
+      archive: (result: unknown) => void;
+      attachChinese: (result: unknown) => Promise<unknown>;
+    };
+    const record = await job.debateOne(symbol, { bilingual: false });
+    job.archive(record);
+    writeRun({ ticker: symbol, state: "done", started, finished: new Date().toISOString() });
+    void job.attachChinese(record).then(() => {
+      try {
+        job.archive(record);
+      } catch (error) {
+        console.error(`ZH archive ${symbol}: ${error instanceof Error ? error.message : error}`);
+      }
+    });
+  } catch (error) {
+    writeRun({
+      ticker: symbol,
+      state: "error",
+      started,
+      finished: new Date().toISOString(),
+      error: error instanceof Error ? error.message : "The desk did not answer.",
+    });
+  } finally {
+    deskRuns.delete(symbol);
+  }
+}
+
+export function startDebate(ticker: string): DeskRun {
+  const symbol = normalizeYahooTicker(ticker);
+  if (deskRuns.has(symbol)) {
+    return readDeskRun(symbol) ?? { ticker: symbol, state: "running", started: new Date().toISOString() };
+  }
+  const run: DeskRun = { ticker: symbol, state: "running", started: new Date().toISOString() };
+  deskRuns.add(symbol);
+  writeRun(run);
+  void finishDebate(symbol, run.started);
+  return run;
 }

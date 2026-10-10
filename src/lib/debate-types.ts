@@ -122,6 +122,14 @@ export type JudgeNote = {
   zh?: JudgeZh;
 };
 
+export type DeskRun = {
+  ticker: string;
+  state: "running" | "done" | "error";
+  started: string;
+  finished?: string;
+  error?: string;
+};
+
 export type DebateResult = {
   ticker: string;
   name: string;

@@ -49,7 +49,9 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(i18n, /news: "新闻"/);
   assert.match(i18n, /Six seats/);
   assert.match(page, /setLang\(lang === "en" \? "zh" : "en"\)/);
-  assert.match(page, /translateSectionFn/);
+  assert.match(page, /startDebateFn/);
+  assert.match(page, /debateRunFn/);
+  assert.equal(page.includes("runDebateFn"), false);
   assert.equal(job.includes("ask(\"macro\""), false);
   assert.equal(page.includes("Thinking</summary>"), false);
   assert.match(archive, /"news"/);

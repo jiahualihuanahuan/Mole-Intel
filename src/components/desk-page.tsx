@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn, translateSectionFn } from "@/lib/debate.functions";
+import { debateRunFn, listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, startDebateFn, translateSectionFn } from "@/lib/debate.functions";
 import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, JudgeZh, SeatNote, SeatZh, Tape } from "@/lib/debate-types";
 import { finalNote } from "@/lib/final-note.mjs";
 import { callName, useI18n, type CopyKey } from "@/lib/i18n";
@@ -97,7 +97,8 @@ function loadSaved(): DebateResult[] {
 export function DeskPage({ routeTicker }: { routeTicker?: string }) {
   const { t, lang, setLang } = useI18n();
   const readTape = useServerFn(readTapeFn);
-  const runDebate = useServerFn(runDebateFn);
+  const startDebate = useServerFn(startDebateFn);
+  const debateRun = useServerFn(debateRunFn);
   const listArchive = useServerFn(listArchiveFn);
   const loadArchive = useServerFn(loadArchiveFn);
   const readBoards = useServerFn(readBoardsFn);
@@ -181,13 +182,18 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     setDeskError("");
     setTapeState("loading");
     loadArchive({ data: { ticker: routeSymbol } })
-      .then((value) => {
+      .then(async (value) => {
         if (ticket !== request.current) return;
         if (value) {
           setDebate((current) => (current?.source === "desk" && current.ticker === routeSymbol ? current : value));
+        }
+        const run = await debateRun({ data: { ticker: routeSymbol } }).catch(() => null);
+        if (ticket !== request.current) return;
+        if (run?.state === "running") {
+          void watchDesk(routeSymbol, ticket);
           return;
         }
-        void startDesk(routeSymbol, ticket);
+        if (!value) void startDesk(routeSymbol, ticket);
       })
       .catch(() => {
         if (ticket !== request.current) return;
@@ -234,36 +240,63 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     void navigate({ to: "/t/$ticker", params: { ticker: symbol } });
   }
 
+  async function watchDesk(symbol: string, ticket: number) {
+    setDeskState("loading");
+    setDeskError("");
+    for (;;) {
+      if (ticket !== request.current) return;
+      let run = null;
+      try {
+        run = await debateRun({ data: { ticker: symbol } });
+      } catch (error) {
+        if (ticket !== request.current) return;
+        setDeskState("error");
+        setDeskError(error instanceof Error ? error.message : "The desk did not answer.");
+        return;
+      }
+      if (ticket !== request.current) return;
+      if (run?.state === "done") {
+        const value = await loadArchive({ data: { ticker: symbol } });
+        if (ticket !== request.current) return;
+        if (!value) {
+          setDeskState("error");
+          setDeskError("The desk finished, but the note was not saved.");
+          return;
+        }
+        setDebate(value);
+        remember(value);
+        setDeskState(value.judge ? "idle" : "error");
+        if (!value.judge) setDeskError(value.errors[0] || "The judge did not write a note.");
+        return;
+      }
+      if (run?.state === "error") {
+        setDeskState("error");
+        setDeskError(run.error || "The desk did not answer.");
+        return;
+      }
+      if (!run) {
+        setDeskState("error");
+        setDeskError("The desk did not start.");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+    }
+  }
+
   async function startDesk(ticker?: string, ticket = request.current) {
     const symbol = ticker ?? selected?.ticker;
     if (!symbol) return;
     setDeskState("loading");
     setDeskError("");
     try {
-      const value = await runDebate({ data: { ticker: symbol } });
-      if (ticket !== request.current) return;
-      setDebate(value);
-      if (value.tape.price != null) {
-        setTape((current) => ({
-          ...value.tape,
-          stories: value.tape.stories?.length ? value.tape.stories : current?.stories,
-          headlines: value.tape.headlines.length ? value.tape.headlines : (current?.headlines ?? []),
-        }));
-      }
-      remember(value);
-      setDeskState(value.judge ? "idle" : "error");
-      if (!value.judge) setDeskError(value.errors[0] || "The judge did not write a note.");
+      await startDebate({ data: { ticker: symbol } });
     } catch (error) {
       if (ticket !== request.current) return;
       setDeskState("error");
-      setDeskError(
-        error instanceof Error
-          ? /failed to fetch/i.test(error.message)
-            ? "The connection dropped while the 3080 was still writing. Reload this name in a minute."
-            : error.message
-          : "The desk did not answer.",
-      );
+      setDeskError(error instanceof Error ? error.message : "The desk did not start.");
+      return;
     }
+    await watchDesk(symbol, ticket);
   }
 
   const normalized = tryNormalizeYahooTicker(query);

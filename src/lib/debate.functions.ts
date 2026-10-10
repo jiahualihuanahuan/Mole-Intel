@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, FeedReport, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, DeskRun, FeedReport, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
 import { normalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 function tickerOf(input: { ticker: string }): { ticker: string } {
@@ -52,9 +52,16 @@ export const translateSectionFn = createServerFn({ method: "POST" })
     return translateStoredSection(data.ticker, data.section);
   });
 
-export const runDebateFn = createServerFn({ method: "POST" })
+export const startDebateFn = createServerFn({ method: "POST" })
   .validator(tickerOf)
-  .handler(async ({ data }): Promise<DebateResult> => {
-    const { runDebate } = await import("./debate.server");
-    return runDebate(data.ticker);
+  .handler(async ({ data }): Promise<DeskRun> => {
+    const { startDebate } = await import("./debate.server");
+    return startDebate(data.ticker);
+  });
+
+export const debateRunFn = createServerFn({ method: "POST" })
+  .validator(tickerOf)
+  .handler(async ({ data }): Promise<DeskRun | null> => {
+    const { readDeskRun } = await import("./debate.server");
+    return readDeskRun(data.ticker);
   });
