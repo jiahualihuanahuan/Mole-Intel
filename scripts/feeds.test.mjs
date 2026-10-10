@@ -8,7 +8,29 @@ import {
   parseNasdaqAmount,
   tenYearFromTreasuryCsv,
   transcriptLinksFromHtml,
+  multiplesFromFigures,
 } from "../src/lib/debate-job.mjs";
+
+test("valuation multiples come from the published P/E and the statements", () => {
+  const multiples = multiplesFromFigures({
+    marketCap: 5_525_648_000_000,
+    price: 229.28,
+    netIncome: 120_067_000_000,
+    equity: 157_293_000_000,
+    ebit: 141_709_000_000,
+    depreciation: 2_843_000_000,
+    cash: 10_605_000_000,
+    shortDebt: 999_000_000,
+    longDebt: 7_469_000_000,
+    actualPe: 50.43,
+    forwardPe: 24.92,
+    forwardEps: 9.25,
+  });
+  assert.equal(multiples.trailingPE, 50.43);
+  assert.equal(multiples.forwardPE, 24.92);
+  assert.ok(multiples.priceToBook > 30 && multiples.priceToBook < 40);
+  assert.ok(multiples.enterpriseToEbitda > 30 && multiples.enterpriseToEbitda < 45);
+});
 
 test("BLS latest numbers parse the headline feed", () => {
   const parsed = parseBlsLatest(

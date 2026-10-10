@@ -275,7 +275,58 @@ try:
         out["hist_52w_low"] = float(hist["Low"].min())
 except Exception:
     pass
-print(json.dumps(out))
+try:
+    def clean(value):
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    def line(frame, names):
+        try:
+            if frame is None or frame.empty:
+                return None
+            column = frame.iloc[:, 0]
+            lookup = {str(label).strip().lower(): label for label in column.index}
+            for name in names:
+                key = lookup.get(name.lower())
+                if key is not None:
+                    return clean(column.loc[key])
+        except Exception:
+            return None
+        return None
+    income = t.income_stmt
+    balance = t.balance_sheet
+    price = clean(out.get("currentPrice")) or clean(out.get("price_last"))
+    cap = clean(out.get("marketCap"))
+    net = line(income, ["Net Income", "Net Income Common Stockholders"])
+    equity = line(balance, ["Stockholders Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"])
+    ebit = line(income, ["EBIT", "Operating Income"])
+    ebitda = line(income, ["EBITDA", "Normalized EBITDA"])
+    if ebitda is None and ebit is not None:
+        amort = line(cf if "cf" in dir() else None, ["Depreciation And Amortization", "Depreciation Amortization Depletion", "Depreciation"])
+        ebitda = ebit + abs(amort or 0)
+    debt = line(balance, ["Total Debt"])
+    cash = line(balance, ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"])
+    if not clean(out.get("trailingPE")) and cap and net and net > 0:
+        out["trailingPE"] = cap / net
+    if not clean(out.get("priceToBook")) and cap and equity and equity > 0:
+        out["priceToBook"] = cap / equity
+    if not clean(out.get("enterpriseToEbitda")) and cap and ebitda and ebitda > 0:
+        enterprise = cap + (debt or 0) - (cash or 0)
+        if enterprise > 0:
+            out["enterpriseToEbitda"] = enterprise / ebitda
+    if not clean(out.get("forwardPE")) and price:
+        estimate = t.get_earnings_estimate()
+        if estimate is not None and not estimate.empty and "0y" in estimate.columns and "avg" in estimate.index:
+            forward_eps = clean(estimate.loc["avg", "0y"])
+            if forward_eps and forward_eps > 0:
+                out["forwardPE"] = price / forward_eps
+except Exception:
+    pass
+print(json.dumps({k: (None if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))) else v) for k, v in out.items()}))
 `;
   return await runPython(code);
 }
@@ -703,6 +754,41 @@ function tableRow(table, label) {
   return (table?.rows || []).find((row) => String(row?.value1 || "").trim().toLowerCase() === label.toLowerCase()) || null;
 }
 
+export function multiplesFromFigures(input) {
+  const row = input || {};
+  const sane = (value) => (typeof value === "number" && Number.isFinite(value) && value > 0 && value < 10000 ? value : null);
+  const marketCap = finite(row.marketCap);
+  const price = finite(row.price);
+  const netIncome = finite(row.netIncome);
+  const equity = finite(row.equity);
+  const ebit = finite(row.ebit);
+  const depreciation = finite(row.depreciation);
+  const trailing = sane(row.actualPe) ?? (marketCap != null && netIncome != null && netIncome > 0 ? marketCap / netIncome : null);
+  const forward = sane(row.forwardPe) ?? (price != null && finite(row.forwardEps) != null && row.forwardEps > 0 ? price / row.forwardEps : null);
+  const book = marketCap != null && equity != null && equity > 0 ? marketCap / equity : null;
+  const ebitda = ebit == null ? null : ebit + Math.abs(depreciation || 0);
+  const cash = finite(row.cash) || 0;
+  const debt = (finite(row.shortDebt) || 0) + (finite(row.longDebt) || 0);
+  const enterprise = marketCap == null ? null : marketCap + debt - cash;
+  return {
+    trailingPE: sane(trailing),
+    forwardPE: sane(forward),
+    priceToBook: sane(book),
+    enterpriseToEbitda: ebitda != null && ebitda > 0 && enterprise != null && enterprise > 0 ? sane(enterprise / ebitda) : null,
+  };
+}
+
+function pePoints(peg) {
+  const chart = peg?.per?.peRatioChart;
+  if (!Array.isArray(chart)) return { actualPe: null, forwardPe: null };
+  const actual = [...chart].reverse().find((point) => /actual/i.test(String(point?.x || "")));
+  const estimate = chart.find((point) => /estimate/i.test(String(point?.x || "")));
+  return {
+    actualPe: finite(Number(actual?.y)),
+    forwardPe: finite(Number(estimate?.y)),
+  };
+}
+
 const SNAPSHOT_CACHE = new Map();
 const TRANSCRIPT_INDEX = new Map();
 const SNAPSHOT_TTL_MS = 15 * 60 * 1000;
@@ -718,7 +804,7 @@ async function nasdaqSnapshot(ticker) {
 
 async function loadNasdaqSnapshot(ticker) {
   for (const symbol of nasdaqSymbols(ticker)) {
-    const [info, summary, targets, ratings, insider, earnings, financials] = await Promise.all([
+    const [info, summary, targets, ratings, insider, earnings, financials, peg, forecast] = await Promise.all([
       nasdaqJson(`/api/quote/${encodeURIComponent(symbol)}/info?assetclass=stocks`),
       nasdaqJson(`/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`),
       nasdaqJson(`/api/analyst/${encodeURIComponent(symbol)}/targetprice`),
@@ -726,6 +812,8 @@ async function loadNasdaqSnapshot(ticker) {
       nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/insider-trades?limit=10`),
       nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/earnings-surprise`),
       nasdaqJson(`/api/company/${encodeURIComponent(symbol)}/financials?frequency=1`),
+      nasdaqJson(`/api/analyst/${encodeURIComponent(symbol)}/peg-ratio`),
+      nasdaqJson(`/api/analyst/${encodeURIComponent(symbol)}/earnings-forecast`),
     ]);
     if (!info?.symbol && !summary?.symbol) continue;
     const consensus = targets?.consensusOverview || {};
@@ -737,6 +825,7 @@ async function loadNasdaqSnapshot(ticker) {
     };
     const ratios = financials?.financialRatiosTable;
     const income = financials?.incomeStatementTable;
+    const balance = financials?.balanceSheetTable;
     const cash = financials?.cashFlowTable;
     const ratio = (label) => {
       const amount = parseNasdaqAmount(tableRow(ratios, label)?.value2);
@@ -749,12 +838,32 @@ async function loadNasdaqSnapshot(ticker) {
     const revenue = dollars(income, "Total Revenue");
     const operatingCash = dollars(cash, "Net Cash Flow-Operating");
     const capex = dollars(cash, "Capital Expenditures");
+    const marketCap = parseNasdaqAmount(summary?.summaryData?.MarketCap?.value);
+    const price = parseNasdaqAmount(info?.primaryData?.lastSalePrice);
+    const yearly = forecast?.yearlyForecast?.rows?.[0];
+    const multiples = multiplesFromFigures({
+      marketCap,
+      price,
+      netIncome: dollars(income, "Net Income-Cont. Operations") ?? dollars(cash, "Net Income"),
+      equity: dollars(balance, "Total Equity"),
+      ebit: dollars(income, "Earnings Before Interest and Tax"),
+      depreciation: dollars(cash, "Depreciation"),
+      cash: dollars(balance, "Cash and Cash Equivalents"),
+      shortDebt: dollars(balance, "Short-Term Debt / Current Portion of Long-Term Debt"),
+      longDebt: dollars(balance, "Long-Term Debt"),
+      ...pePoints(peg),
+      forwardEps: finite(Number(yearly?.consensusEPSForecast)),
+    });
     const surpriseRows = earnings?.earningsSurpriseTable?.rows || [];
     return {
       symbol: info?.symbol || summary?.symbol || symbol,
       listing_note: (info?.symbol || symbol) === String(ticker).toUpperCase() ? null : `Nasdaq listing ${info?.symbol || symbol}`,
-      price: parseNasdaqAmount(info?.primaryData?.lastSalePrice),
-      marketCap: parseNasdaqAmount(summary?.summaryData?.MarketCap?.value),
+      price,
+      marketCap,
+      trailingPE: multiples.trailingPE,
+      forwardPE: multiples.forwardPE,
+      priceToBook: multiples.priceToBook,
+      enterpriseToEbitda: multiples.enterpriseToEbitda,
       sector: summary?.summaryData?.Sector?.value || "",
       industry: summary?.summaryData?.Industry?.value || "",
       grossMargins: ratio("Gross Margin"),
@@ -1182,6 +1291,10 @@ async function buildPacket(ticker) {
       operatingCashFlow: nasdaq.operatingCashFlow,
       capex: nasdaq.capex,
       freeCashflow: nasdaq.freeCashflow,
+      trailingPE: nasdaq.trailingPE,
+      forwardPE: nasdaq.forwardPE,
+      priceToBook: nasdaq.priceToBook,
+      enterpriseToEbitda: nasdaq.enterpriseToEbitda,
     });
     if (!yfinanceOk && (nasdaq.marketCap != null || nasdaq.profitMargins != null)) {
       fundamentals = chart?.currentPrice != null ? "yahoo chart + Nasdaq statements" : "Nasdaq statements";
