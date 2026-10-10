@@ -4,9 +4,9 @@ A web desk for one ticker at a time. Opening a name shows the last note. If ther
 
 The page shows the company tape (price, multiples, market cap), the headlines those seats read, and the debate. Notes land in `data/debates.jsonl`.
 
-vLLM is not part of this Compose file. Start it yourself on the host, port 8000, served name `qwen3.5-4b-awq`, with `--max-model-len 65536 --gpu-memory-utilization 0.9`. Seats are sent two at a time, matching `--max-num-seqs 2`. Each reply is capped at 4,096 tokens and the prompt is cut to stay inside that window. SearXNG is expected at `192.168.86.35:8099`.
+Ollama is not part of this Compose file. It should already be running at `192.168.86.35:11434`, model `qwen3.5:9b`. Seats are sent two at a time. Each reply is capped at 4,096 tokens and the prompt is cut to stay inside a 65,536-token window. SearXNG is expected at `192.168.86.35:8099`.
 
-Mole-Intel-Debate is merged here. Do not start a vLLM service from that repo.
+Mole-Intel-Debate is merged here. Do not start an Ollama service from that repo.
 
 ## Run
 
@@ -36,7 +36,7 @@ git pull
 docker compose up --build -d
 ```
 
-vLLM still has to be listening on the host at port 8000 before 11pm. Watch the wait with `docker compose logs -f desk`.
+Ollama still has to be listening at `192.168.86.35:11434` before 11pm. Watch the wait with `docker compose logs -f desk`.
 
 To run a short pass now, without waiting for 11pm:
 

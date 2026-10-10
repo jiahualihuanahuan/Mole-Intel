@@ -1,8 +1,8 @@
 name: mole-intel
 
-# The web app and the 11pm desk. vLLM is a separate compose file.
-# Both services use the host network so they can call 127.0.0.1:8000,
-# which is the port vLLM publishes. Do not add a ports: block with host network.
+# The web app and the 11pm desk. Ollama is not in this file.
+# It is already running at 192.168.86.35:11434. Host network reaches that LAN address.
+# Do not add a ports: block with host network.
 services:
   web:
     build: .
@@ -13,8 +13,8 @@ services:
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://127.0.0.1:8000/v1
-      LLM_MODEL: qwen3.5-4b-awq
+      LLM_BASE_URL: http://192.168.86.35:11434/v1
+      LLM_MODEL: qwen3.5:9b
       LLM_CONTEXT: "65536"
       SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}
@@ -43,8 +43,8 @@ services:
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://127.0.0.1:8000/v1
-      LLM_MODEL: qwen3.5-4b-awq
+      LLM_BASE_URL: http://192.168.86.35:11434/v1
+      LLM_MODEL: qwen3.5:9b
       LLM_CONTEXT: "65536"
       SEARXNG_URL: http://192.168.86.35:8099
       FRED_API_KEY: ${FRED_API_KEY:-}

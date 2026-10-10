@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait until 23:00 America/Toronto, then run the six-seat batch
 # across the whole developed-world universe.
-# Does not change the GPU power limit. vLLM is not started here.
+# Does not change the GPU power limit. Ollama is not started here.
 # It has to already be listening on the host.
 # Set BATCH_LIMIT to a positive number only to cap one night.
 set -uo pipefail

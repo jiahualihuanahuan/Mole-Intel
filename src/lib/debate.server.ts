@@ -277,7 +277,7 @@ export async function runDebate(ticker: string): Promise<DebateResult> {
   debate.sector = debate.company?.sector || known?.sector || "Unlisted";
   debate.indexName = known?.index ?? "Tape";
   debate.source = "desk";
-  debate.model = process.env.LLM_MODEL || "qwen3.5-4b-awq";
+  debate.model = process.env.LLM_MODEL || "qwen3.5:9b";
   if (tape) {
     const archivedHeads = debate.tape.headlines;
     debate.tape = tape;

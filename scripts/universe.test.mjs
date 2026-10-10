@@ -32,10 +32,11 @@ test("news seat is sent to the model and shown on the page", () => {
   const archive = fs.readFileSync(new URL("../src/lib/debate-archive.ts", import.meta.url), "utf8");
   assert.match(job, /ask\("news", newsPacket\)/);
   assert.match(job, /packet\.fundamentals/);
-  assert.match(job, /qwen3\.5-4b-awq/);
+  assert.match(job, /qwen3\.5:9b/);
+  assert.match(job, /192\.168\.86\.35:11434/);
   assert.match(job, /65536/);
   assert.match(job, /const MAX_OUTPUT = 4096/);
-  assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /gpu-memory-utilization 0\.9/);
+  assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /192\.168\.86\.35:11434/);
   assert.match(job, /timeout: LLM_WAIT_MS/);
   assert.match(job, /LLM_CONCURRENCY \|\| 2/);
   assert.equal(job.includes("one JSON object"), false);

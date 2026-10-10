@@ -6,7 +6,7 @@
  * AlphaStreet). SearXNG is used when the homelab search box answers.
  * FRED and Finnhub are fallbacks only, and only for fields the public
  * sources missed. Finnhub's free plan has no price targets and no transcripts.
- * Six seats write notes on vLLM, then the judge lists the disagreements.
+ * Six seats write notes on Ollama, then the judge lists the disagreements.
  * The news seat is the only one that receives the headlines.
  *
  * Env: LLM_BASE_URL, LLM_MODEL, MOLE_DATA, PYTHON, FRED_API_KEY, SEARXNG_URL,
@@ -48,8 +48,8 @@ function loadDeskSecrets() {
 
 loadDeskSecrets();
 
-const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:8000/v1").replace(/\/$/, "");
-const MODEL = process.env.LLM_MODEL || "qwen3.5-4b-awq";
+const BASE_URL = (process.env.LLM_BASE_URL || "http://192.168.86.35:11434/v1").replace(/\/$/, "");
+const MODEL = process.env.LLM_MODEL || "qwen3.5:9b";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
 const FRED_KEY = process.env.FRED_API_KEY || "";
@@ -92,7 +92,7 @@ const AGENTS = {
   },
 }
 
-// Sequence cap for vLLM --max-model-len 65536.
+// Sequence cap. Ollama must be started with a context at least this long.
 // Two sequences at a time, so a 4096-token reply fits --gpu-memory-utilization 0.9 on a 10GB 3080.
 const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
 const MAX_OUTPUT = 4096;
