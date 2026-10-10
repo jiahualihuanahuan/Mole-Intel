@@ -4,7 +4,6 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
-import { finalNote } from "./final-note.mjs";
 
 const BASE_URL = (process.env.LLM_BASE_URL || "http://192.168.86.35:11434/v1").replace(/\/$/, "");
 const MODEL = process.env.LLM_MODEL || "qwen3.5:9b";
@@ -99,7 +98,8 @@ function post(body) {
           }
           try {
             const parsed = JSON.parse(raw);
-            resolve(String(parsed?.choices?.[0]?.message?.content || ""));
+            const message = parsed?.choices?.[0]?.message || {};
+            resolve(String(message.content || message.reasoning || message.reasoning_content || ""));
           } catch (error) {
             reject(error);
           }
@@ -112,6 +112,17 @@ function post(body) {
   });
 }
 
+function plain(raw) {
+  return String(raw || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "\n")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "\n")
+    .replace(/<\|think\|>[\s\S]*?<\|\/think\|>/gi, "\n")
+    .replace(/<think>[\s\S]*$/i, "")
+    .replace(/<thinking>[\s\S]*$/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function translateChunk(text) {
   const content = await post({
     model: MODEL,
@@ -119,7 +130,7 @@ async function translateChunk(text) {
       {
         role: "system",
         content:
-          "You translate one short piece of financial research into Simplified Chinese. Keep ticker symbols, company names, and numbers unchanged. Output only the translation.",
+          "Translate the user's financial note into Simplified Chinese. Keep ticker symbols, company names, and numbers unchanged. Output only the Chinese translation.",
       },
       { role: "user", content: text },
     ],
@@ -128,7 +139,7 @@ async function translateChunk(text) {
     think: false,
     chat_template_kwargs: { enable_thinking: false },
   });
-  return finalNote(content).trim();
+  return plain(content);
 }
 
 export async function translateText(text) {
@@ -144,7 +155,7 @@ export async function translateText(text) {
       continue;
     }
     const zh = await translateChunk(chunk);
-    if (!zh) throw new Error("empty translation");
+    if (!zh) continue;
     remember(hash, zh);
     out.push(zh);
   }

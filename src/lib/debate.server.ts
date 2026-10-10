@@ -266,25 +266,54 @@ export async function readChinese(ticker: string): Promise<{ sections: Record<st
   return { sections: mod.loadChinese(symbol), current: mod.chineseCurrent(symbol) };
 }
 
+function visibleSeat(seat: { summary: string; argument: string; points: string[]; verdict: string } | null): string {
+  if (!seat) return "";
+  return [seat.summary, seat.argument, ...seat.points, seat.verdict].filter((part) => part.trim()).join("\n\n");
+}
+
+function visibleJudge(note: { summary: string; bullPoints: string[]; bearPoints: string[]; openQuestions: string[]; disagreements: { topic: string; bull: string; bear: string }[] } | null): string {
+  if (!note) return "";
+  const rows = note.disagreements.flatMap((row) => [row.topic, row.bull, row.bear]);
+  return [note.summary, ...note.bullPoints, ...note.bearPoints, ...rows, ...note.openQuestions].filter((part) => part.trim()).join("\n\n");
+}
+
 export function startChinese(ticker: string): { ticker: string; state: "running" | "idle" } {
   const symbol = normalizeYahooTicker(ticker);
   if (chineseJobs.has(symbol)) return { ticker: symbol, state: "running" };
   const record = latestRecord(symbol);
-  if (!record) return { ticker: symbol, state: "idle" };
+  const debate = record ? debateFromRecord(record) : null;
+  if (!debate) return { ticker: symbol, state: "idle" };
   chineseJobs.add(symbol);
-  void (async () => {
-    try {
-      const job = (await import("./debate-job.mjs")) as {
-        attachChinese: (result: unknown) => Promise<unknown>;
-      };
-      await job.attachChinese(record);
-    } catch (error) {
-      console.error(`ZH ${symbol}: ${error instanceof Error ? error.message : error}`);
-    } finally {
-      chineseJobs.delete(symbol);
-    }
-  })();
+  void runChinese(symbol, debate).finally(() => chineseJobs.delete(symbol));
   return { ticker: symbol, state: "running" };
+}
+
+async function runChinese(symbol: string, debate: DebateResult) {
+  const mod = (await import("./chinese.mjs")) as unknown as {
+    loadChinese: (ticker: string) => Record<string, { text?: string }>;
+    appendChinese: (row: unknown) => void;
+    setChineseCurrent: (ticker: string, section: string) => void;
+  };
+  const { translateText } = (await import("./translate.mjs")) as unknown as {
+    translateText: (text: string) => Promise<string>;
+  };
+  const saved = mod.loadChinese(symbol);
+  const order = ["judge", "news", "bull", "bear", "valuation", "earnings", "analyst"] as const;
+  for (const section of order) {
+    if (saved[section]?.text) continue;
+    const source = section === "judge" ? visibleJudge(debate.judge) : visibleSeat(debate.seats[section]);
+    if (!source.trim()) continue;
+    mod.setChineseCurrent(symbol, section);
+    try {
+      const text = (await translateText(source)).trim();
+      if (!text) continue;
+      mod.appendChinese({ ticker: symbol, section, as_of: new Date().toISOString(), zh: { text } });
+      saved[section] = { text };
+    } catch (error) {
+      console.error(`ZH ${symbol} ${section}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  mod.setChineseCurrent(symbol, "");
 }
 
 function latestRecord(ticker: string): Record<string, unknown> | null {

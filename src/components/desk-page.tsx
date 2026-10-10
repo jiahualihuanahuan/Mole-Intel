@@ -591,33 +591,36 @@ function Fact({
   );
 }
 
-function seatReady(zh: SeatZh | undefined): boolean {
-  return Boolean(zh && (zh.summary || zh.argument || zh.points?.length || zh.verdict));
+function chineseBody(zh: unknown): string {
+  if (!zh || typeof zh !== "object") return "";
+  const row = zh as Record<string, unknown>;
+  if (typeof row.text === "string" && row.text.trim()) return row.text.trim();
+  const parts: unknown[] = [row.summary, row.argument, row.verdict];
+  for (const key of ["points", "bullPoints", "bearPoints", "openQuestions"] as const) {
+    if (Array.isArray(row[key])) parts.push(...row[key]);
+  }
+  if (Array.isArray(row.disagreements)) {
+    for (const item of row.disagreements) {
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      parts.push(entry.topic, entry.bull, entry.bear);
+    }
+  }
+  return parts.filter((part): part is string => typeof part === "string" && part.trim().length > 0).join("\n\n");
 }
 
 function shownSeat(note: SeatNote | null, extra: SeatZh | JudgeZh | undefined, lang: string): SeatNote | null {
   if (!note || lang !== "zh") return note;
-  const zh = seatReady(extra as SeatZh | undefined) ? (extra as SeatZh) : note.zh;
-  if (!zh || !seatReady(zh)) return note;
-  return { ...note, summary: zh.summary, argument: zh.argument, points: zh.points, verdict: zh.verdict };
+  const text = chineseBody(extra) || chineseBody(note.zh);
+  if (!text) return note;
+  return { ...note, summary: text, argument: "", points: [], verdict: "" };
 }
 
 function shownJudge(note: JudgeNote | null, extra: SeatZh | JudgeZh | undefined, lang: string): JudgeNote | null {
   if (!note || lang !== "zh") return note;
-  const zh = judgeReady(extra as JudgeZh | undefined) ? (extra as JudgeZh) : note.zh;
-  if (!zh || !judgeReady(zh)) return note;
-  return {
-    ...note,
-    summary: zh.summary,
-    bullPoints: zh.bullPoints,
-    bearPoints: zh.bearPoints,
-    disagreements: zh.disagreements,
-    openQuestions: zh.openQuestions,
-  };
-}
-
-function judgeReady(zh: JudgeZh | undefined): boolean {
-  return Boolean(zh && (zh.summary || zh.bullPoints?.length || zh.bearPoints?.length || zh.disagreements?.length || zh.openQuestions?.length));
+  const text = chineseBody(extra) || chineseBody(note.zh);
+  if (!text) return note;
+  return { ...note, summary: text, bullPoints: [], bearPoints: [], disagreements: [], openQuestions: [] };
 }
 
 function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {

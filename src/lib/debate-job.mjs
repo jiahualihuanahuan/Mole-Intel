@@ -1418,52 +1418,19 @@ async function zhText(text) {
   return translateText(text);
 }
 
-async function seatChinese(seat) {
-  if (!seat?.ok || !seat.note || typeof seat.note !== "object") return null;
-  const note = seat.note;
-  const summary = typeof note.summary === "string" && note.summary.trim() ? note.summary : typeof note.thesis === "string" ? note.thesis : "";
-  const argument = [note.argument, note.fundamental_impact].filter((part) => typeof part === "string" && part.trim()).join("\n");
-  const verdict = typeof note.verdict === "string" ? note.verdict : "";
-  const points = Array.isArray(note.points) ? note.points.filter((point) => typeof point === "string" && point.trim()) : [];
-  if (!summary.trim() && !argument.trim() && !verdict.trim() && points.length === 0) return null;
-  const zh = {
-    summary: summary.trim() ? await zhText(summary) : "",
-    argument: argument.trim() ? await zhText(argument) : "",
-    points: [],
-    verdict: verdict.trim() ? await zhText(verdict) : "",
-  };
-  for (const point of points) zh.points.push(await zhText(point));
-  return zh;
-}
-
-async function judgeChinese(judge) {
-  const note = judge?.note && typeof judge.note === "object" ? judge.note : judge?.ok !== false ? judge : null;
-  if (!note || typeof note !== "object") return null;
-  const summary = [note.summary, note.argument].filter((part) => typeof part === "string" && part.trim()).join("\n\n");
-  const bullPoints = note.bull_points || note.bullPoints || [];
-  const bearPoints = note.bear_points || note.bearPoints || [];
-  const openQuestions = note.open_questions || note.openQuestions || [];
-  const disagreements = Array.isArray(note.disagreements) ? note.disagreements : [];
-  if (!summary.trim() && !bullPoints.length && !bearPoints.length && !openQuestions.length && !disagreements.length) return null;
-  const zh = {
-    summary: summary.trim() ? await zhText(summary) : "",
-    bullPoints: [],
-    bearPoints: [],
-    disagreements: [],
-    openQuestions: [],
-  };
-  for (const point of bullPoints) if (typeof point === "string" && point.trim()) zh.bullPoints.push(await zhText(point));
-  for (const point of bearPoints) if (typeof point === "string" && point.trim()) zh.bearPoints.push(await zhText(point));
-  for (const row of disagreements) {
-    if (!row || typeof row !== "object") continue;
-    zh.disagreements.push({
-      topic: row.topic ? await zhText(String(row.topic)) : "",
-      bull: row.bull_view || row.bullView || row.bull ? await zhText(String(row.bull_view || row.bullView || row.bull)) : "",
-      bear: row.bear_view || row.bearView || row.bear ? await zhText(String(row.bear_view || row.bearView || row.bear)) : "",
-    });
+async function sectionText(value) {
+  if (!value || typeof value !== "object") return "";
+  const note = value.note && typeof value.note === "object" ? value.note : value.ok === false ? null : value;
+  if (!note || typeof note !== "object") return "";
+  const parts = [];
+  for (const key of ["summary", "thesis", "argument", "fundamental_impact", "verdict", "consensus"]) {
+    if (typeof note[key] === "string" && note[key].trim()) parts.push(note[key].trim());
   }
-  for (const question of openQuestions) if (typeof question === "string" && question.trim()) zh.openQuestions.push(await zhText(question));
-  return zh;
+  for (const key of ["points", "bull_points", "bullPoints", "bear_points", "bearPoints", "open_questions", "openQuestions"]) {
+    if (!Array.isArray(note[key])) continue;
+    for (const item of note[key]) if (typeof item === "string" && item.trim()) parts.push(item.trim());
+  }
+  return parts.join("\n\n");
 }
 
 export async function attachChinese(result) {
@@ -1471,13 +1438,15 @@ export async function attachChinese(result) {
   const saved = loadChinese(symbol);
   const agents = result?.agents || {};
   for (const label of ["judge", "news", "bull", "bear", "valuation", "earnings", "analyst"]) {
-    if (saved[label]) continue;
+    if (saved[label]?.text) continue;
+    const source = await sectionText(label === "judge" ? result?.judge : agents[label]);
+    if (!source) continue;
     setChineseCurrent(symbol, label);
     try {
-      const zh = label === "judge" ? await judgeChinese(result?.judge) : await seatChinese(agents[label]);
-      if (!zh) continue;
-      appendChinese({ ticker: symbol, section: label, as_of: new Date().toISOString(), zh });
-      saved[label] = zh;
+      const text = (await zhText(source)).trim();
+      if (!text) continue;
+      appendChinese({ ticker: symbol, section: label, as_of: new Date().toISOString(), zh: { text } });
+      saved[label] = { text };
     } catch (error) {
       console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
     }
