@@ -15,7 +15,7 @@ git pull
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:8090`. The header toggle switches the site between English and Simplified Chinese. A new desk run stores both languages. An older note is translated one section at a time, and each finished section is saved.
+Open `http://127.0.0.1:8090`. The header toggle switches the site between English and Simplified Chinese. Chinese is stored in `data/chinese.jsonl`, one section per line. Each section shows up as soon as its line is written.
 
 Optional keys, before compose:
 

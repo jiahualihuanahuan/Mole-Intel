@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { debateRunFn, listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, startDebateFn, translateSectionFn } from "@/lib/debate.functions";
+import { debateRunFn, listArchiveFn, loadArchiveFn, readBoardsFn, readChineseFn, readTapeFn, startChineseFn, startDebateFn } from "@/lib/debate.functions";
 import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, JudgeZh, SeatNote, SeatZh, Tape } from "@/lib/debate-types";
 import { finalNote } from "@/lib/final-note.mjs";
 import { callName, useI18n, type CopyKey } from "@/lib/i18n";
@@ -592,7 +592,7 @@ function Fact({
 }
 
 function seatReady(zh: SeatZh | undefined): boolean {
-  return Boolean(zh && (zh.summary || zh.argument || zh.points.length || zh.verdict));
+  return Boolean(zh && (zh.summary || zh.argument || zh.points?.length || zh.verdict));
 }
 
 function shownSeat(note: SeatNote | null, extra: SeatZh | JudgeZh | undefined, lang: string): SeatNote | null {
@@ -617,44 +617,38 @@ function shownJudge(note: JudgeNote | null, extra: SeatZh | JudgeZh | undefined,
 }
 
 function judgeReady(zh: JudgeZh | undefined): boolean {
-  return Boolean(zh && (zh.summary || zh.bullPoints.length || zh.bearPoints.length || zh.disagreements.length || zh.openQuestions.length));
+  return Boolean(zh && (zh.summary || zh.bullPoints?.length || zh.bearPoints?.length || zh.disagreements?.length || zh.openQuestions?.length));
 }
 
 function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
   const { lang, t } = useI18n();
-  const translate = useServerFn(translateSectionFn);
+  const startChinese = useServerFn(startChineseFn);
+  const readChinese = useServerFn(readChineseFn);
   const [extra, setExtra] = useState<Record<string, SeatZh | JudgeZh>>({});
   const [current, setCurrent] = useState("");
-  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (lang !== "zh") {
       setCurrent("");
-      setFailed(false);
       return;
     }
     let cancel = false;
-    const sections = ["judge", ...SEAT_ORDER] as const;
-    (async () => {
-      for (const section of sections) {
-        if (cancel) return;
-        const stored = section === "judge" ? debate.judge?.zh : debate.seats[section]?.zh;
-        const ready = section === "judge" ? judgeReady(stored as JudgeZh | undefined) : seatReady(stored as SeatZh | undefined);
-        if (ready) continue;
-        const hasEnglish = section === "judge" ? Boolean(debate.judge) : Boolean(debate.seats[section]);
-        if (!hasEnglish) continue;
-        setCurrent(section);
-        try {
-          const zh = await translate({ data: { ticker: debate.ticker, section } });
-          if (cancel || !zh) continue;
-          setExtra((prev) => ({ ...prev, [section]: zh }));
-        } catch {
-          if (!cancel) setFailed(true);
-        }
-      }
-      if (!cancel) setCurrent("");
-    })();
+    const pull = () => {
+      readChinese({ data: { ticker: debate.ticker } })
+        .then((saved) => {
+          if (cancel || !saved) return;
+          setExtra(saved.sections || {});
+          setCurrent(saved.current || "");
+        })
+        .catch(() => {
+          if (!cancel) setCurrent("");
+        });
+    };
+    void startChinese({ data: { ticker: debate.ticker } }).catch(() => undefined);
+    pull();
+    const timer = window.setInterval(pull, 3000);
     return () => {
       cancel = true;
+      window.clearInterval(timer);
     };
   }, [lang, debate.ticker, debate.asOf]);
   const archived: Headline[] = debate.news.length
@@ -675,7 +669,6 @@ function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
         {lang === "zh" && current && (
           <p className="text-sm text-muted">{t("translatingSection")} {t(current as CopyKey)}</p>
         )}
-        {failed && <p className="text-sm text-accent">{t("translateFailed")}</p>}
         {debate.company && <CompanySheet info={debate.company} />}
         {judgeNote && <Judge note={judgeNote} model={debate.model} />}
         <section>

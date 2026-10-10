@@ -19,6 +19,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendChinese, loadChinese, setChineseCurrent } from "./chinese.mjs";
 import { finalNote } from "./final-note.mjs";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
@@ -1417,50 +1418,72 @@ async function zhText(text) {
   return translateText(text);
 }
 
-async function stampZh(seat) {
-  if (!seat?.ok || !seat.note || typeof seat.note !== "object") return seat;
+async function seatChinese(seat) {
+  if (!seat?.ok || !seat.note || typeof seat.note !== "object") return null;
   const note = seat.note;
-  const zh = {};
-  for (const key of ["summary", "thesis", "argument", "fundamental_impact", "verdict"]) {
-    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await zhText(note[key]);
-  }
-  if (Array.isArray(note.points)) {
-    zh.points = [];
-    for (const point of note.points) {
-      if (typeof point === "string" && point.trim()) zh.points.push(await zhText(point));
-    }
-  }
-  note.zh = zh;
-  return seat;
+  const summary = typeof note.summary === "string" && note.summary.trim() ? note.summary : typeof note.thesis === "string" ? note.thesis : "";
+  const argument = [note.argument, note.fundamental_impact].filter((part) => typeof part === "string" && part.trim()).join("\n");
+  const verdict = typeof note.verdict === "string" ? note.verdict : "";
+  const points = Array.isArray(note.points) ? note.points.filter((point) => typeof point === "string" && point.trim()) : [];
+  if (!summary.trim() && !argument.trim() && !verdict.trim() && points.length === 0) return null;
+  const zh = {
+    summary: summary.trim() ? await zhText(summary) : "",
+    argument: argument.trim() ? await zhText(argument) : "",
+    points: [],
+    verdict: verdict.trim() ? await zhText(verdict) : "",
+  };
+  for (const point of points) zh.points.push(await zhText(point));
+  return zh;
 }
 
-async function stampJudgeZh(judge) {
+async function judgeChinese(judge) {
   const note = judge?.note && typeof judge.note === "object" ? judge.note : judge?.ok !== false ? judge : null;
-  if (!note || typeof note !== "object") return judge;
-  const zh = {};
-  for (const key of ["summary", "argument", "verdict"]) {
-    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await zhText(note[key]);
+  if (!note || typeof note !== "object") return null;
+  const summary = [note.summary, note.argument].filter((part) => typeof part === "string" && part.trim()).join("\n\n");
+  const bullPoints = note.bull_points || note.bullPoints || [];
+  const bearPoints = note.bear_points || note.bearPoints || [];
+  const openQuestions = note.open_questions || note.openQuestions || [];
+  const disagreements = Array.isArray(note.disagreements) ? note.disagreements : [];
+  if (!summary.trim() && !bullPoints.length && !bearPoints.length && !openQuestions.length && !disagreements.length) return null;
+  const zh = {
+    summary: summary.trim() ? await zhText(summary) : "",
+    bullPoints: [],
+    bearPoints: [],
+    disagreements: [],
+    openQuestions: [],
+  };
+  for (const point of bullPoints) if (typeof point === "string" && point.trim()) zh.bullPoints.push(await zhText(point));
+  for (const point of bearPoints) if (typeof point === "string" && point.trim()) zh.bearPoints.push(await zhText(point));
+  for (const row of disagreements) {
+    if (!row || typeof row !== "object") continue;
+    zh.disagreements.push({
+      topic: row.topic ? await zhText(String(row.topic)) : "",
+      bull: row.bull_view || row.bullView || row.bull ? await zhText(String(row.bull_view || row.bullView || row.bull)) : "",
+      bear: row.bear_view || row.bearView || row.bear ? await zhText(String(row.bear_view || row.bearView || row.bear)) : "",
+    });
   }
-  for (const key of ["bull_points", "bullPoints", "bear_points", "bearPoints", "open_questions", "openQuestions"]) {
-    if (!Array.isArray(note[key])) continue;
-    zh[key] = [];
-    for (const item of note[key]) {
-      if (typeof item === "string" && item.trim()) zh[key].push(await zhText(item));
+  for (const question of openQuestions) if (typeof question === "string" && question.trim()) zh.openQuestions.push(await zhText(question));
+  return zh;
+}
+
+export async function attachChinese(result) {
+  const symbol = result?.ticker || "";
+  const saved = loadChinese(symbol);
+  const agents = result?.agents || {};
+  for (const label of ["judge", "news", "bull", "bear", "valuation", "earnings", "analyst"]) {
+    if (saved[label]) continue;
+    setChineseCurrent(symbol, label);
+    try {
+      const zh = label === "judge" ? await judgeChinese(result?.judge) : await seatChinese(agents[label]);
+      if (!zh) continue;
+      appendChinese({ ticker: symbol, section: label, as_of: new Date().toISOString(), zh });
+      saved[label] = zh;
+    } catch (error) {
+      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
     }
   }
-  if (Array.isArray(note.disagreements)) {
-    zh.disagreements = [];
-    for (const row of note.disagreements) {
-      if (!row || typeof row !== "object") continue;
-      zh.disagreements.push({
-        topic: row.topic ? await zhText(String(row.topic)) : "",
-        bull_view: row.bull_view || row.bullView ? await zhText(String(row.bull_view || row.bullView)) : "",
-        bear_view: row.bear_view || row.bearView ? await zhText(String(row.bear_view || row.bearView)) : "",
-      });
-    }
-  }
-  note.zh = zh;
-  return judge;
+  setChineseCurrent(symbol, "");
+  return result;
 }
 
 async function debateOne(ticker, options = {}) {
@@ -1520,24 +1543,6 @@ async function debateOne(ticker, options = {}) {
     judge,
   };
   if (options.bilingual !== false) await attachChinese(result);
-  return result;
-}
-
-export async function attachChinese(result) {
-  const symbol = result?.ticker || "";
-  const agents = result?.agents || {};
-  for (const label of ["news", "bull", "bear", "valuation", "earnings", "analyst"]) {
-    try {
-      await stampZh(agents[label]);
-    } catch (error) {
-      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
-    }
-  }
-  try {
-    await stampJudgeZh(result?.judge);
-  } catch (error) {
-    console.error(`ZH ${symbol} judge: ${error instanceof Error ? error.message : error}`);
-  }
   return result;
 }
 

@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, DeskRun, FeedReport, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, DeskRun, FeedReport, Tape } from "@/lib/debate-types";
 import { normalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 function tickerOf(input: { ticker: string }): { ticker: string } {
@@ -42,14 +42,18 @@ export const readFeedsFn = createServerFn({ method: "POST" })
     return readFeeds(data.ticker);
   });
 
-export const translateSectionFn = createServerFn({ method: "POST" })
-  .validator((input: { ticker?: unknown; section?: unknown }) => ({
-    ticker: normalizeYahooTicker(String(input?.ticker ?? "")),
-    section: String(input?.section ?? ""),
-  }))
-  .handler(async ({ data }): Promise<SeatZh | JudgeZh | null> => {
-    const { translateStoredSection } = await import("./debate.server");
-    return translateStoredSection(data.ticker, data.section);
+export const readChineseFn = createServerFn({ method: "POST" })
+  .validator(tickerOf)
+  .handler(async ({ data }) => {
+    const { readChinese } = await import("./debate.server");
+    return readChinese(data.ticker);
+  });
+
+export const startChineseFn = createServerFn({ method: "POST" })
+  .validator(tickerOf)
+  .handler(async ({ data }) => {
+    const { startChinese } = await import("./debate.server");
+    return startChinese(data.ticker);
   });
 
 export const startDebateFn = createServerFn({ method: "POST" })
