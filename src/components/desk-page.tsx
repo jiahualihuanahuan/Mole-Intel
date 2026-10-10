@@ -1,23 +1,22 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { findCompany, universe, type UniverseRow } from "@/data/universe";
-import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn } from "@/lib/debate.functions";
+import { listArchiveFn, loadArchiveFn, readBoardsFn, readTapeFn, runDebateFn, translateFn } from "@/lib/debate.functions";
 import type { CompanyInfo, DebateResult, DeskBoards, Headline, JudgeNote, SeatNote, Tape } from "@/lib/debate-types";
 import { finalNote } from "@/lib/final-note.mjs";
+import { callName, useI18n } from "@/lib/i18n";
 import { safeHttpUrl, tryNormalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 const STORE = "mole-intel-debates";
 const SEAT_ORDER = ["news", "bull", "bear", "valuation", "earnings", "analyst"] as const;
+type SeatKey = (typeof SEAT_ORDER)[number];
 
-const SEAT_LABEL: Record<(typeof SEAT_ORDER)[number], string> = {
-  news: "News",
-  bull: "Bull",
-  bear: "Bear",
-  valuation: "Valuation",
-  earnings: "Earnings",
-  analyst: "Analyst ratings",
-};
+const ShowContext = createContext<(text: string) => string>((text) => text);
+
+function useShow() {
+  return useContext(ShowContext);
+}
 
 type Listed = {
   ticker: string;
@@ -96,6 +95,7 @@ function loadSaved(): DebateResult[] {
 }
 
 export function DeskPage({ routeTicker }: { routeTicker?: string }) {
+  const { t, lang, setLang } = useI18n();
   const readTape = useServerFn(readTapeFn);
   const runDebate = useServerFn(runDebateFn);
   const listArchive = useServerFn(listArchiveFn);
@@ -269,7 +269,7 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     <main className="min-h-screen bg-bg text-ink">
       <header className="sticky top-0 z-20 border-b border-line bg-bg/95 px-4 py-3 backdrop-blur sm:px-8">
         <div className="mx-auto flex max-w-6xl items-center gap-3">
-          <Link to="/" aria-label="Mole Intel, back to the desk" className="flex shrink-0 items-center gap-2 text-ink no-underline">
+          <Link to="/" aria-label={t("home")} className="flex shrink-0 items-center gap-2 text-ink no-underline">
             <img src="/favicon.svg" alt="" width={32} height={32} className="h-8 w-8" />
             <span className="hidden font-display text-xl sm:inline">Mole Intel</span>
           </Link>
@@ -288,14 +288,14 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
                 else if (matches[0]) go(matches[0].ticker);
                 else if (normalized) go(normalized);
               }}
-              placeholder="Ticker or company"
-              aria-label="Ticker or company"
+              placeholder={t("search")}
+              aria-label={t("searchLabel")}
               className="min-h-11 w-full rounded-card border border-line bg-surface px-3 text-sm outline-none"
             />
             {searchOpen && query.trim() && (
               <ul className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-card border border-line bg-surface shadow-sm">
                 {matches.length === 0 && !showNormalized && (
-                  <li className="px-3 py-3 text-sm text-muted">No company in the desk list.</li>
+                  <li className="px-3 py-3 text-sm text-muted">{t("noMatch")}</li>
                 )}
                 {matches.map((row) => (
                   <li key={row.ticker}>
@@ -320,13 +320,20 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
                       className="flex min-h-11 w-full items-baseline gap-2 px-3 text-left text-ink no-underline hover:bg-chip"
                     >
                       <span className="font-medium">{normalized}</span>
-                      <span className="text-sm text-muted">Open this ticker</span>
+                      <span className="text-sm text-muted">{t("openTicker")}</span>
                     </Link>
                   </li>
                 )}
               </ul>
             )}
           </div>
+          <button
+            type="button"
+            onClick={() => setLang(lang === "en" ? "zh" : "en")}
+            className="min-h-11 shrink-0 rounded-card border border-line bg-surface px-3 text-sm"
+          >
+            {lang === "en" ? "中文" : "EN"}
+          </button>
         </div>
       </header>
 
@@ -336,7 +343,7 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
         )}
         {tickerRejected && (
           <p className="max-w-xl pt-6 text-sm text-accent">
-            That is not a Yahoo Finance ticker. Try NVDA, BRK-B, SHOP.TO, SHEL.L, or 7203.T.
+            {t("badTicker")}
           </p>
         )}
         {selected && routeSymbol && (
@@ -366,25 +373,24 @@ function Empty({
   boards: DeskBoards | null;
   boardState: "loading" | "ready" | "error";
 }) {
+  const { t, lang } = useI18n();
   return (
     <section className="pt-6">
-      <p className="text-xs tracking-wide text-muted">The desk</p>
-      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">Six seats. One reads the news. The judge reads the macro tape.</h1>
-      <p className="mt-4 max-w-xl text-base text-muted">
-        Search a company, or start from the largest names, the bullish calls, and whatever just hit the wires.
-      </p>
-      {boardState === "loading" && <p className="mt-8 text-sm text-muted">Reading the lists…</p>}
-      {boardState === "error" && <p className="mt-8 text-sm text-accent">The lists did not come back.</p>}
+      <p className="text-xs tracking-wide text-muted">{t("kicker")}</p>
+      <h1 className="max-w-3xl font-display text-4xl leading-tight sm:text-5xl">{t("headline")}</h1>
+      <p className="mt-4 max-w-xl text-base text-muted">{t("lede")}</p>
+      {boardState === "loading" && <p className="mt-8 text-sm text-muted">{t("listsLoading")}</p>}
+      {boardState === "error" && <p className="mt-8 text-sm text-accent">{t("listsError")}</p>}
       {boards && (
         <div className="mt-8 grid min-w-0 gap-8 lg:grid-cols-3">
-          <Board title="Largest" hint="Market cap" rows={boards.largest} empty="No market-cap print." />
-          <Board title="Most bullish" hint="The judge, then fresh upgrades" rows={boards.bullish} empty="No bullish names yet." />
-          <Board title="Breaking" hint="Named in today's wires" rows={boards.news} empty="No company in the latest wires." />
+          <Board title={t("largest")} hint={t("largestHint")} rows={boards.largest} empty={t("largestEmpty")} />
+          <Board title={t("bullish")} hint={t("bullishHint")} rows={boards.bullish} empty={t("bullishEmpty")} />
+          <Board title={t("breaking")} hint={t("breakingHint")} rows={boards.news} empty={t("breakingEmpty")} />
         </div>
       )}
       {saved.length > 0 && (
         <div className="mt-10 max-w-2xl">
-          <h2 className="text-xs tracking-wide text-muted">{archive ? "Already sat" : "Saved on this browser"}</h2>
+          <h2 className="text-xs tracking-wide text-muted">{archive ? t("sat") : t("saved")}</h2>
           <ul className="mt-2 divide-y divide-line border-y border-line">
             {saved.map((row) => (
               <li key={row.ticker}>
@@ -395,7 +401,7 @@ function Empty({
                 >
                   <span className="font-medium">{row.ticker}</span>
                   <span className="truncate text-sm text-muted">{row.name}</span>
-                  <span className="ml-auto text-xs capitalize text-muted">{row.call || "unread"}</span>
+                  <span className="ml-auto text-xs text-muted">{callName(row.call, lang)}</span>
                 </Link>
               </li>
             ))}
@@ -417,6 +423,7 @@ function Board({
   rows: DeskBoards["largest"];
   empty: string;
 }) {
+  const { t } = useI18n();
   return (
     <section className="min-w-0">
       <h2 className="font-display text-2xl">{title}</h2>
@@ -444,7 +451,7 @@ function Board({
                   </Link>
                   {row.url && (
                     <a href={row.url} target="_blank" rel="noreferrer" className="mt-1 shrink-0 text-xs text-muted underline">
-                      Source
+                      {t("source")}
                     </a>
                   )}
                 </div>
@@ -474,6 +481,7 @@ function Company({
   deskError: string;
   onRun: () => void;
 }) {
+  const { t } = useI18n();
   const shown = tape ?? debate?.tape ?? null;
   return (
     <article>
@@ -484,13 +492,13 @@ function Company({
       </p>
 
       <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
-        <Fact label="Last" value={shown ? money(shown.price) : "—"} hint={shown?.currency ?? ""} />
-        <Fact label="Day" value={shown ? pct(shown.changePct) : "—"} className={toneClass(shown?.changePct ?? null)} />
-        <Fact label="3 months" value={shown ? pct(shown.return3mPct) : "—"} className={toneClass(shown?.return3mPct ?? null)} />
-        <Fact label="Wires" value={shown ? String(shown.stories?.length || shown.headlines.length) : "—"} hint="headlines" />
+        <Fact label={t("last")} value={shown ? money(shown.price) : "—"} hint={shown?.currency ?? ""} />
+        <Fact label={t("day")} value={shown ? pct(shown.changePct) : "—"} className={toneClass(shown?.changePct ?? null)} />
+        <Fact label={t("threeMonths")} value={shown ? pct(shown.return3mPct) : "—"} className={toneClass(shown?.return3mPct ?? null)} />
+        <Fact label={t("wires")} value={shown ? String(shown.stories?.length || shown.headlines.length) : "—"} hint={t("headlines")} />
       </dl>
-      {tapeState === "loading" && <p className="mt-3 text-sm text-muted">Reading the tape…</p>}
-      {tapeState === "error" && <p className="mt-3 text-sm text-accent">The tape did not load. The desk can still sit, but it will say the numbers are unknown.</p>}
+      {tapeState === "loading" && <p className="mt-3 text-sm text-muted">{t("tapeLoading")}</p>}
+      {tapeState === "error" && <p className="mt-3 text-sm text-accent">{t("tapeError")}</p>}
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button
@@ -499,17 +507,15 @@ function Company({
           disabled={deskState === "loading"}
           className="min-h-11 rounded-card bg-ink px-4 text-sm text-surface disabled:opacity-60"
         >
-          {deskState === "loading" ? "The desk is sitting…" : debate ? "Run it again on the 3080" : "Sit the desk"}
+          {deskState === "loading" ? t("sitting") : debate ? t("again") : t("sit")}
         </button>
         <p className="text-xs text-muted">
           {debate?.source === "archive"
-            ? `Already in the archive${debate.asOf ? `, ${debate.asOf.slice(0, 16).replace("T", " ")} UTC` : ""}.`
-            : "A ticker with no note runs as soon as you open it."}
+            ? `${t("archived")}${debate.asOf ? `, ${debate.asOf.slice(0, 16).replace("T", " ")} UTC` : ""}`
+            : t("runsOnOpen")}
         </p>
       </div>
-      {deskState === "loading" && (
-        <p className="mt-4 text-sm text-muted">Reading the tape, the wires, and the filings. The news seat digests the headlines, then the judge. A first pass takes a few minutes.</p>
-      )}
+      {deskState === "loading" && <p className="mt-4 text-sm text-muted">{t("sittingLong")}</p>}
       {deskError && <p className="mt-4 text-sm text-accent">{deskError}</p>}
 
       {debate && <Desk debate={debate} live={tape?.stories ?? []} />}
@@ -546,7 +552,61 @@ function Fact({
   );
 }
 
+function collectNote(note: SeatNote | null): string[] {
+  if (!note) return [];
+  return [note.summary, note.argument, note.verdict, ...note.points].filter((text) => text.trim());
+}
+
+function collectJudge(note: JudgeNote | null): string[] {
+  if (!note) return [];
+  return [
+    note.summary,
+    ...note.bullPoints,
+    ...note.bearPoints,
+    ...note.openQuestions,
+    ...note.disagreements.flatMap((row) => [row.topic, row.bull, row.bear]),
+  ].filter((text) => text.trim());
+}
+
 function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
+  const { lang, t } = useI18n();
+  const translate = useServerFn(translateFn);
+  const texts = useMemo(() => {
+    const rows = SEAT_ORDER.flatMap((key) => collectNote(debate.seats[key] ?? null));
+    return [...rows, ...collectJudge(debate.judge)].filter((text, index, all) => all.indexOf(text) === index);
+  }, [debate]);
+  const [map, setMap] = useState<Record<string, string> | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (lang !== "zh") {
+      setMap(null);
+      setFailed(false);
+      return;
+    }
+    let cancel = false;
+    setMap(null);
+    setFailed(false);
+    translate({ data: { texts } })
+      .then((translated) => {
+        if (cancel) return;
+        const next: Record<string, string> = {};
+        texts.forEach((text, index) => {
+          next[text] = translated[index] || text;
+        });
+        setMap(next);
+      })
+      .catch(() => {
+        if (!cancel) setFailed(true);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [lang, debate.ticker, debate.asOf, texts]);
+  const show = (text: string) => {
+    if (lang !== "zh" || failed) return text;
+    if (!map) return "";
+    return map[text] ?? text;
+  };
   const archived: Headline[] = debate.news.length
     ? debate.news
     : debate.tape.stories?.length
@@ -559,47 +619,53 @@ function Desk({ debate, live }: { debate: DebateResult; live: Headline[] }) {
     return hit?.url ? { ...item, url: hit.url, source: item.source || hit.source } : item;
   });
   return (
-    <div className="mt-8 space-y-8">
-      {debate.company && <CompanySheet info={debate.company} />}
-      {debate.judge && <Judge note={debate.judge} model={debate.model} />}
-      <section>
-        <h2 className="text-xs tracking-wide text-muted">The seats</h2>
-        <div className="mt-3 space-y-3">
-          {SEAT_ORDER.map((key) => (
-            <Seat key={key} note={debate.seats[key] ?? null} label={SEAT_LABEL[key]} wires={key === "news" ? wires : undefined} />
-          ))}
-        </div>
-      </section>
-    </div>
+    <ShowContext.Provider value={show}>
+      <div className="mt-8 space-y-8">
+        {lang === "zh" && !map && !failed && <p className="text-sm text-muted">{t("translating")}</p>}
+        {failed && <p className="text-sm text-accent">{t("translateFailed")}</p>}
+        {debate.company && <CompanySheet info={debate.company} />}
+        {debate.judge && <Judge note={debate.judge} model={debate.model} />}
+        <section>
+          <h2 className="text-xs tracking-wide text-muted">{t("seats")}</h2>
+          <div className="mt-3 space-y-3">
+            {SEAT_ORDER.map((key) => (
+              <Seat key={key} note={debate.seats[key] ?? null} seatKey={key} wires={key === "news" ? wires : undefined} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </ShowContext.Provider>
   );
 }
 
 function CompanySheet({ info }: { info: CompanyInfo }) {
+  const { t } = useI18n();
   return (
     <section>
-      <h2 className="text-xs tracking-wide text-muted">The company</h2>
+      <h2 className="text-xs tracking-wide text-muted">{t("company")}</h2>
       <dl className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
-        <Fact label="Market cap" value={compactMoney(info.marketCap)} />
-        <Fact label="Trail P/E" value={multiple(info.trailingPe)} />
-        <Fact label="Fwd P/E" value={multiple(info.forwardPe)} />
-        <Fact label="P/B" value={multiple(info.priceToBook)} />
-        <Fact label="EV/EBITDA" value={multiple(info.evEbitda)} />
-        <Fact label="ROE" value={ratioPct(info.roe)} />
-        <Fact label="FCF yield" value={ratioPct(info.fcfYield)} />
-        <Fact label="Target" value={info.targetMean == null ? "—" : `$${money(info.targetMean)}`} />
-        <Fact label="52w high" value={info.high52 == null ? "—" : `$${money(info.high52)}`} />
-        <Fact label="52w low" value={info.low52 == null ? "—" : `$${money(info.low52)}`} />
-        <Fact label="1 month" value={pct(info.return1mPct)} className={toneClass(info.return1mPct)} />
-        <Fact label="Industry" value={info.industry || "—"} small />
+        <Fact label={t("marketCap")} value={compactMoney(info.marketCap)} />
+        <Fact label={t("trailPe")} value={multiple(info.trailingPe)} />
+        <Fact label={t("fwdPe")} value={multiple(info.forwardPe)} />
+        <Fact label={t("pb")} value={multiple(info.priceToBook)} />
+        <Fact label={t("ev")} value={multiple(info.evEbitda)} />
+        <Fact label={t("roe")} value={ratioPct(info.roe)} />
+        <Fact label={t("fcf")} value={ratioPct(info.fcfYield)} />
+        <Fact label={t("target")} value={info.targetMean == null ? "—" : `$${money(info.targetMean)}`} />
+        <Fact label={t("high52")} value={info.high52 == null ? "—" : `$${money(info.high52)}`} />
+        <Fact label={t("low52")} value={info.low52 == null ? "—" : `$${money(info.low52)}`} />
+        <Fact label={t("month")} value={pct(info.return1mPct)} className={toneClass(info.return1mPct)} />
+        <Fact label={t("industry")} value={info.industry || "—"} small />
       </dl>
     </section>
   );
 }
 
 function NewsList({ items }: { items: Headline[] }) {
+  const { t } = useI18n();
   return (
     <section>
-      <h2 className="text-xs tracking-wide text-muted">The wires</h2>
+      <h2 className="text-xs tracking-wide text-muted">{t("theWires")}</h2>
       <ul className="mt-2 divide-y divide-line border-y border-line">
         {items.map((item) => {
           const href = safeHttpUrl(item.url);
@@ -631,29 +697,31 @@ function NewsList({ items }: { items: Headline[] }) {
 }
 
 function Judge({ note, model }: { note: JudgeNote; model: string }) {
+  const { t, lang } = useI18n();
+  const show = useShow();
   const callColor =
     note.call === "bullish" ? "text-pine" : note.call === "bearish" ? "text-accent" : "text-ink";
   return (
     <section className="rounded-card border border-line bg-surface p-4 sm:p-6">
-      <p className="text-xs tracking-wide text-muted">Judge</p>
-      <p className={`mt-1 font-display text-3xl capitalize ${callColor}`}>{note.call}</p>
+      <p className="text-xs tracking-wide text-muted">{t("judge")}</p>
+      <p className={`mt-1 font-display text-3xl ${callColor}`}>{callName(note.call, lang)}</p>
       {note.conviction != null && (
-        <p className="text-sm tabular-nums text-muted">Conviction {Math.round(note.conviction * 100)}</p>
+        <p className="text-sm tabular-nums text-muted">{t("conviction")} {Math.round(note.conviction * 100)}</p>
       )}
       {note.summary && <Markdown text={note.summary} />}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <PointList title="For" items={note.bullPoints} />
-        <PointList title="Against" items={note.bearPoints} />
+        <PointList title={t("forCase")} items={note.bullPoints} />
+        <PointList title={t("against")} items={note.bearPoints} />
       </div>
       {note.disagreements.length > 0 && (
         <div className="mt-5">
-          <h3 className="text-xs tracking-wide text-muted">Still open</h3>
+          <h3 className="text-xs tracking-wide text-muted">{t("stillOpen")}</h3>
           <ul className="mt-2 space-y-3">
             {note.disagreements.map((row) => (
               <li key={row.topic} className="border-t border-line pt-3">
-                <p className="text-sm font-medium">{inline(row.topic)}</p>
-                {row.bull && <p className="mt-1 text-sm leading-relaxed"><span className="text-pine">Bull. </span>{inline(row.bull)}</p>}
-                {row.bear && <p className="mt-1 text-sm leading-relaxed"><span className="text-accent">Bear. </span>{inline(row.bear)}</p>}
+                <p className="text-sm font-medium">{inline(show(row.topic))}</p>
+                {row.bull && <p className="mt-1 text-sm leading-relaxed"><span className="text-pine">{t("bull")}. </span>{inline(show(row.bull))}</p>}
+                {row.bear && <p className="mt-1 text-sm leading-relaxed"><span className="text-accent">{t("bear")}. </span>{inline(show(row.bear))}</p>}
               </li>
             ))}
           </ul>
@@ -662,51 +730,52 @@ function Judge({ note, model }: { note: JudgeNote; model: string }) {
       {note.openQuestions.length > 0 && (
         <ul className="mt-4 space-y-1">
           {note.openQuestions.map((question) => (
-            <li key={question} className="text-sm text-muted">{inline(question)}</li>
+            <li key={question} className="text-sm text-muted">{inline(show(question))}</li>
           ))}
         </ul>
       )}
-      <p className="mt-4 text-xs text-muted">Answered by {model}</p>
+      <p className="mt-4 text-xs text-muted">{t("answered")} {model}</p>
     </section>
   );
 }
 
 function PointList({ title, items }: { title: string; items: string[] }) {
+  const show = useShow();
   if (items.length === 0) return null;
   return (
     <div>
       <h3 className="text-xs tracking-wide text-muted">{title}</h3>
       <ul className="mt-1 space-y-1">
         {items.map((item) => (
-          <li key={item} className="text-sm leading-relaxed">{inline(item)}</li>
+          <li key={item} className="text-sm leading-relaxed">{inline(show(item))}</li>
         ))}
       </ul>
     </div>
   );
 }
 
-function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wires?: Headline[] }) {
-  const isNews = label === "News";
+function Seat({ note, seatKey, wires }: { note: SeatNote | null; seatKey: SeatKey; wires?: Headline[] }) {
+  const { t } = useI18n();
+  const show = useShow();
+  const isNews = seatKey === "news";
   return (
     <section className="rounded-card border border-line bg-surface p-4 sm:p-6">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-2xl">{label}</h3>
+        <h3 className="font-display text-2xl">{t(seatKey)}</h3>
         {note?.confidence != null && (
-          <p className="text-xs tabular-nums text-muted">Confidence {Math.round(note.confidence * 100)}</p>
+          <p className="text-xs tabular-nums text-muted">{t("confidence")} {Math.round(note.confidence * 100)}</p>
         )}
       </div>
-      {isNews && <p className="mt-1 text-xs text-muted">What the headlines change in the fundamentals</p>}
+      {isNews && <p className="mt-1 text-xs text-muted">{t("newsHint")}</p>}
       {!note && (
-        <p className="mt-2 text-sm text-muted">
-          {isNews ? "No news note in this pass. Run the desk again so this seat can read the wires." : "This seat did not write a note."}
-        </p>
+        <p className="mt-2 text-sm text-muted">{isNews ? t("noNews") : t("noNote")}</p>
       )}
       {note?.summary && <Markdown text={note.summary} />}
       {note?.argument && <Markdown text={note.argument} />}
       {note && note.points.length > 0 && (
         <ul className="mt-4 max-w-3xl list-disc space-y-2 pl-5">
           {note.points.map((point) => (
-            <li key={point} className="text-sm leading-relaxed text-muted">{inline(point)}</li>
+            <li key={point} className="text-sm leading-relaxed text-muted">{inline(show(point))}</li>
           ))}
         </ul>
       )}
@@ -737,7 +806,8 @@ function Seat({ note, label, wires }: { note: SeatNote | null; label: string; wi
 }
 
 function Markdown({ text }: { text: string }) {
-  const blocks = parseMarkdown(finalNote(text));
+  const show = useShow();
+  const blocks = parseMarkdown(finalNote(show(text)));
   if (blocks.length === 0) return null;
   return (
     <div className="mt-3 max-w-3xl space-y-3 text-sm leading-relaxed">
@@ -758,7 +828,7 @@ function Markdown({ text }: { text: string }) {
             <ol key={index} className="list-decimal space-y-1 pl-5">{items}</ol>
           );
         }
-        return <p key={index}>{inline(block.text)}</p>;
+        return <p key={index}>{inline(block.kind === "p" ? block.text : "")}</p>;
       })}
     </div>
   );

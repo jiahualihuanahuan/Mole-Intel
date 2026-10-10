@@ -44,8 +44,11 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /max_tokens: fitted\.output/);
   assert.match(job, /truncated to fit the context window/);
   assert.equal(job.includes("ask(\"bull\", packet)"), false);
-  assert.match(page, /news: "News"/);
-  assert.match(page, /Six seats/);
+  const i18n = fs.readFileSync(new URL("../src/lib/i18n.tsx", import.meta.url), "utf8");
+  assert.match(i18n, /news: "新闻"/);
+  assert.match(i18n, /Six seats/);
+  assert.match(page, /setLang\(lang === "en" \? "zh" : "en"\)/);
+  assert.match(page, /translateFn/);
   assert.equal(job.includes("ask(\"macro\""), false);
   assert.equal(page.includes("Thinking</summary>"), false);
   assert.match(archive, /"news"/);

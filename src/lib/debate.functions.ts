@@ -42,6 +42,16 @@ export const readFeedsFn = createServerFn({ method: "POST" })
     return readFeeds(data.ticker);
   });
 
+export const translateFn = createServerFn({ method: "POST" })
+  .validator((input: { texts?: unknown }) => {
+    const texts = Array.isArray(input?.texts) ? input.texts.filter((item): item is string => typeof item === "string") : [];
+    return { texts: texts.slice(0, 80).map((text) => text.slice(0, 20000)) };
+  })
+  .handler(async ({ data }): Promise<string[]> => {
+    const { translateZh } = await import("./translate.server");
+    return translateZh(data.texts);
+  });
+
 export const runDebateFn = createServerFn({ method: "POST" })
   .validator(tickerOf)
   .handler(async ({ data }): Promise<DebateResult> => {
