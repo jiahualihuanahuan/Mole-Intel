@@ -20,7 +20,6 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { finalNote } from "./final-note.mjs";
-import { translateText } from "./translate.mjs";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
 function loadDeskSecrets() {
@@ -99,7 +98,7 @@ const AGENTS = {
 const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
 const MAX_OUTPUT = 4096;
 const LLM_WAIT_MS = 30 * 60 * 1000;
-const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 2));
+const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 1));
 
 function llmPost(url, body) {
   const target = new URL(url);
@@ -176,6 +175,11 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
     } catch (error) {
       const cause = error?.cause;
       const detail = cause?.code || cause?.message || error?.message || "fetch failed";
+      const retryable = /ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|fetch failed|TIMEOUT|EPIPE/i.test(String(detail));
+      if (retryable && attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+        continue;
+      }
       throw new Error(`LLM unreachable at ${BASE_URL} (${detail})`);
     }
     const raw = res.text;
@@ -1408,17 +1412,22 @@ function noteForJudge(seat) {
   return { ok: true, note: text.slice(0, 6000) || "This seat did not write a note." };
 }
 
+async function zhText(text) {
+  const { translateText } = await import("./translate.mjs");
+  return translateText(text);
+}
+
 async function stampZh(seat) {
   if (!seat?.ok || !seat.note || typeof seat.note !== "object") return seat;
   const note = seat.note;
   const zh = {};
   for (const key of ["summary", "thesis", "argument", "fundamental_impact", "verdict"]) {
-    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await translateText(note[key]);
+    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await zhText(note[key]);
   }
   if (Array.isArray(note.points)) {
     zh.points = [];
     for (const point of note.points) {
-      if (typeof point === "string" && point.trim()) zh.points.push(await translateText(point));
+      if (typeof point === "string" && point.trim()) zh.points.push(await zhText(point));
     }
   }
   note.zh = zh;
@@ -1430,13 +1439,13 @@ async function stampJudgeZh(judge) {
   if (!note || typeof note !== "object") return judge;
   const zh = {};
   for (const key of ["summary", "argument", "verdict"]) {
-    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await translateText(note[key]);
+    if (typeof note[key] === "string" && note[key].trim()) zh[key] = await zhText(note[key]);
   }
   for (const key of ["bull_points", "bullPoints", "bear_points", "bearPoints", "open_questions", "openQuestions"]) {
     if (!Array.isArray(note[key])) continue;
     zh[key] = [];
     for (const item of note[key]) {
-      if (typeof item === "string" && item.trim()) zh[key].push(await translateText(item));
+      if (typeof item === "string" && item.trim()) zh[key].push(await zhText(item));
     }
   }
   if (Array.isArray(note.disagreements)) {
@@ -1444,9 +1453,9 @@ async function stampJudgeZh(judge) {
     for (const row of note.disagreements) {
       if (!row || typeof row !== "object") continue;
       zh.disagreements.push({
-        topic: row.topic ? await translateText(String(row.topic)) : "",
-        bull_view: row.bull_view || row.bullView ? await translateText(String(row.bull_view || row.bullView)) : "",
-        bear_view: row.bear_view || row.bearView ? await translateText(String(row.bear_view || row.bearView)) : "",
+        topic: row.topic ? await zhText(String(row.topic)) : "",
+        bull_view: row.bull_view || row.bullView ? await zhText(String(row.bull_view || row.bullView)) : "",
+        bear_view: row.bear_view || row.bearView ? await zhText(String(row.bear_view || row.bearView)) : "",
       });
     }
   }
@@ -1454,7 +1463,7 @@ async function stampJudgeZh(judge) {
   return judge;
 }
 
-async function debateOne(ticker) {
+async function debateOne(ticker, options = {}) {
   const symbol = normalizeYahooTicker(ticker);
   const packet = await buildPacket(symbol);
   const { news: headlines, ...deskPacket } = packet;
@@ -1500,26 +1509,7 @@ async function debateOne(ticker) {
       news: noteForJudge(news),
     },
   });
-  for (const [label, seat] of [
-    ["news", news],
-    ["bull", bull],
-    ["bear", bear],
-    ["valuation", valuation],
-    ["earnings", earnings],
-    ["analyst", analyst],
-  ]) {
-    try {
-      await stampZh(seat);
-    } catch (error) {
-      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
-    }
-  }
-  try {
-    await stampJudgeZh(judge);
-  } catch (error) {
-    console.error(`ZH ${symbol} judge: ${error instanceof Error ? error.message : error}`);
-  }
-  return {
+  const result = {
     ticker: symbol,
     as_of: packet.as_of,
     model: MODEL,
@@ -1529,6 +1519,26 @@ async function debateOne(ticker) {
     agents: { bull, bear, valuation, earnings, analyst, news },
     judge,
   };
+  if (options.bilingual !== false) await attachChinese(result);
+  return result;
+}
+
+export async function attachChinese(result) {
+  const symbol = result?.ticker || "";
+  const agents = result?.agents || {};
+  for (const label of ["news", "bull", "bear", "valuation", "earnings", "analyst"]) {
+    try {
+      await stampZh(agents[label]);
+    } catch (error) {
+      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  try {
+    await stampJudgeZh(result?.judge);
+  } catch (error) {
+    console.error(`ZH ${symbol} judge: ${error instanceof Error ? error.message : error}`);
+  }
+  return result;
 }
 
 // ---------- Archive ----------

@@ -340,11 +340,12 @@ export async function translateStoredSection(ticker: string, section: string): P
 export async function runDebate(ticker: string): Promise<DebateResult> {
   const symbol = normalizeYahooTicker(ticker);
   const job = (await import("./debate-job.mjs")) as {
-    debateOne: (ticker: string) => Promise<unknown>;
+    debateOne: (ticker: string, options?: { bilingual?: boolean }) => Promise<unknown>;
     archive: (result: unknown) => void;
+    attachChinese: (result: unknown) => Promise<unknown>;
   };
   const [record, tape] = await Promise.all([
-    job.debateOne(symbol),
+    job.debateOne(symbol, { bilingual: false }),
     readTape(symbol).catch(() => null),
   ]);
   const debate = debateFromRecord(record);
@@ -354,6 +355,13 @@ export async function runDebate(ticker: string): Promise<DebateResult> {
   } catch (error) {
     debate.errors.push(`archive: ${error instanceof Error ? error.message : "could not write debates.jsonl"}`);
   }
+  void job.attachChinese(record).then(() => {
+    try {
+      job.archive(record);
+    } catch (error) {
+      console.error(`ZH archive ${symbol}: ${error instanceof Error ? error.message : error}`);
+    }
+  });
   const known = findCompany(symbol);
   debate.name = known?.name ?? tape?.name ?? symbol;
   debate.sector = debate.company?.sector || known?.sector || "Unlisted";

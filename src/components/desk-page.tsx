@@ -256,7 +256,13 @@ export function DeskPage({ routeTicker }: { routeTicker?: string }) {
     } catch (error) {
       if (ticket !== request.current) return;
       setDeskState("error");
-      setDeskError(error instanceof Error ? error.message : "The desk did not answer.");
+      setDeskError(
+        error instanceof Error
+          ? /failed to fetch/i.test(error.message)
+            ? "The connection dropped while the 3080 was still writing. Reload this name in a minute."
+            : error.message
+          : "The desk did not answer.",
+      );
     }
   }
 
