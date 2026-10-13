@@ -1,7 +1,7 @@
 name: mole-intel
 
 # The web app and the 11pm desk. Ollama is not in this file.
-# It is already running at 192.168.86.35:11434. Host network reaches that LAN address.
+# It is already running on this Ubuntu server at 127.0.0.1:11434. Host network reaches that port.
 # Do not add a ports: block with host network.
 services:
   web:
@@ -13,7 +13,7 @@ services:
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://192.168.86.35:11434/v1
+      LLM_BASE_URL: http://127.0.0.1:11434/v1
       LLM_MODEL: qwen3.5:9b
       LLM_CONTEXT: "65536"
       SEARXNG_URL: http://192.168.86.35:8099
@@ -43,7 +43,7 @@ services:
       TZ: America/Toronto
       MOLE_DATA: /data
       PYTHON: /opt/yf/bin/python
-      LLM_BASE_URL: http://192.168.86.35:11434/v1
+      LLM_BASE_URL: http://127.0.0.1:11434/v1
       LLM_MODEL: qwen3.5:9b
       LLM_CONTEXT: "65536"
       SEARXNG_URL: http://192.168.86.35:8099

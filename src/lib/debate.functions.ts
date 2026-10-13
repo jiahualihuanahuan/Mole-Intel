@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, DeskRun, FeedReport, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, FeedReport, Tape } from "@/lib/debate-types";
 import { normalizeYahooTicker } from "@/lib/yahoo-ticker.mjs";
 
 function tickerOf(input: { ticker: string }): { ticker: string } {
@@ -42,30 +42,9 @@ export const readFeedsFn = createServerFn({ method: "POST" })
     return readFeeds(data.ticker);
   });
 
-export const readChineseFn = createServerFn({ method: "POST" })
+export const runDebateFn = createServerFn({ method: "POST" })
   .validator(tickerOf)
-  .handler(async ({ data }) => {
-    const { readChinese } = await import("./debate.server");
-    return readChinese(data.ticker);
-  });
-
-export const startChineseFn = createServerFn({ method: "POST" })
-  .validator(tickerOf)
-  .handler(async ({ data }) => {
-    const { startChinese } = await import("./debate.server");
-    return startChinese(data.ticker);
-  });
-
-export const startDebateFn = createServerFn({ method: "POST" })
-  .validator(tickerOf)
-  .handler(async ({ data }): Promise<DeskRun> => {
-    const { startDebate } = await import("./debate.server");
-    return startDebate(data.ticker);
-  });
-
-export const debateRunFn = createServerFn({ method: "POST" })
-  .validator(tickerOf)
-  .handler(async ({ data }): Promise<DeskRun | null> => {
-    const { readDeskRun } = await import("./debate.server");
-    return readDeskRun(data.ticker);
+  .handler(async ({ data }): Promise<DebateResult> => {
+    const { runDebate } = await import("./debate.server");
+    return runDebate(data.ticker);
   });

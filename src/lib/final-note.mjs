@@ -1,4 +1,3 @@
-/** @param {string} raw */
 export function finalNote(raw) {
   let text = String(raw || "");
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, "\n");

@@ -1,8 +1,8 @@
 import { findCompany } from "@/data/universe";
 import { debateFromRecord, hitFromRecord, type ArchiveHit } from "@/lib/debate-archive";
-import type { DebateResult, DeskBoards, DeskRun, FeedReport, Headline, JudgeZh, SeatZh, Tape } from "@/lib/debate-types";
+import type { DebateResult, DeskBoards, FeedReport, Headline, Tape } from "@/lib/debate-types";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "@/lib/yahoo-ticker.mjs";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 function finite(value: unknown): number | null {
@@ -255,133 +255,33 @@ export async function readFeeds(ticker: string): Promise<FeedReport> {
   return job.sourceReport(symbol);
 }
 
-const chineseJobs = new Set<string>();
-
-export async function readChinese(ticker: string): Promise<{ sections: Record<string, SeatZh | JudgeZh>; current: string }> {
+export async function runDebate(ticker: string): Promise<DebateResult> {
   const symbol = normalizeYahooTicker(ticker);
-  const mod = (await import("./chinese.mjs")) as unknown as {
-    loadChinese: (ticker: string) => Record<string, SeatZh | JudgeZh>;
-    chineseCurrent: (ticker: string) => string;
+  const job = (await import("./debate-job.mjs")) as {
+    debateOne: (ticker: string) => Promise<unknown>;
+    archive: (result: unknown) => void;
   };
-  return { sections: mod.loadChinese(symbol), current: mod.chineseCurrent(symbol) };
-}
-
-function visibleSeat(seat: { summary: string; argument: string; points: string[]; verdict: string } | null): string {
-  if (!seat) return "";
-  return [seat.summary, seat.argument, ...seat.points, seat.verdict].filter((part) => part.trim()).join("\n\n");
-}
-
-function visibleJudge(note: { summary: string; bullPoints: string[]; bearPoints: string[]; openQuestions: string[]; disagreements: { topic: string; bull: string; bear: string }[] } | null): string {
-  if (!note) return "";
-  const rows = note.disagreements.flatMap((row) => [row.topic, row.bull, row.bear]);
-  return [note.summary, ...note.bullPoints, ...note.bearPoints, ...rows, ...note.openQuestions].filter((part) => part.trim()).join("\n\n");
-}
-
-export function startChinese(ticker: string): { ticker: string; state: "running" | "idle" } {
-  const symbol = normalizeYahooTicker(ticker);
-  if (chineseJobs.has(symbol)) return { ticker: symbol, state: "running" };
-  const record = latestRecord(symbol);
-  const debate = record ? debateFromRecord(record) : null;
-  if (!debate) return { ticker: symbol, state: "idle" };
-  chineseJobs.add(symbol);
-  void runChinese(symbol, debate).finally(() => chineseJobs.delete(symbol));
-  return { ticker: symbol, state: "running" };
-}
-
-async function runChinese(symbol: string, debate: DebateResult) {
-  const mod = (await import("./chinese.mjs")) as unknown as {
-    loadChinese: (ticker: string) => Record<string, { text?: string }>;
-    appendChinese: (row: unknown) => void;
-    setChineseCurrent: (ticker: string, section: string) => void;
-  };
-  const { translateText } = (await import("./translate.mjs")) as unknown as {
-    translateText: (text: string) => Promise<string>;
-  };
-  const saved = mod.loadChinese(symbol);
-  const order = ["judge", "news", "bull", "bear", "valuation", "earnings", "analyst"] as const;
-  for (const section of order) {
-    if (saved[section]?.text) continue;
-    const source = section === "judge" ? visibleJudge(debate.judge) : visibleSeat(debate.seats[section]);
-    if (!source.trim()) continue;
-    mod.setChineseCurrent(symbol, section);
-    try {
-      const text = (await translateText(source)).trim();
-      if (!text) continue;
-      mod.appendChinese({ ticker: symbol, section, as_of: new Date().toISOString(), zh: { text } });
-      saved[section] = { text };
-    } catch (error) {
-      console.error(`ZH ${symbol} ${section}: ${error instanceof Error ? error.message : error}`);
-    }
-  }
-  mod.setChineseCurrent(symbol, "");
-}
-
-function latestRecord(ticker: string): Record<string, unknown> | null {
-  const symbol = normalizeYahooTicker(ticker);
-  let found: Record<string, unknown> | null = null;
-  for (const record of readArchiveRecords()) {
-    const hit = hitFromRecord(record);
-    if (hit?.ticker === symbol && record && typeof record === "object") found = record as Record<string, unknown>;
-  }
-  return found;
-}
-
-const deskRuns = new Set<string>();
-
-function runPath(ticker: string) {
-  return path.join(path.dirname(archiveFile()), "runs", `${ticker.replace(/[^A-Za-z0-9.-]/g, "_")}.json`);
-}
-
-function writeRun(run: DeskRun) {
-  const file = runPath(run.ticker);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(run));
-}
-
-export function readDeskRun(ticker: string): DeskRun | null {
-  const symbol = normalizeYahooTicker(ticker);
+  const [record, tape] = await Promise.all([
+    job.debateOne(symbol),
+    readTape(symbol).catch(() => null),
+  ]);
+  const debate = debateFromRecord(record);
+  if (!debate) throw new Error("The desk wrote a note the page could not read.");
   try {
-    const run = JSON.parse(readFileSync(runPath(symbol), "utf8")) as DeskRun;
-    if (!run || run.ticker !== symbol) return null;
-    if (run.state === "running" && !deskRuns.has(symbol)) return null;
-    return run;
-  } catch {
-    return null;
-  }
-}
-
-async function finishDebate(symbol: string, started: string) {
-  try {
-    const job = (await import("./debate-job.mjs")) as {
-      debateOne: (ticker: string, options?: { bilingual?: boolean }) => Promise<unknown>;
-      archive: (result: unknown) => void;
-      attachChinese: (result: unknown) => Promise<unknown>;
-    };
-    const record = await job.debateOne(symbol, { bilingual: false });
     job.archive(record);
-    writeRun({ ticker: symbol, state: "done", started, finished: new Date().toISOString() });
-    startChinese(symbol);
   } catch (error) {
-    writeRun({
-      ticker: symbol,
-      state: "error",
-      started,
-      finished: new Date().toISOString(),
-      error: error instanceof Error ? error.message : "The desk did not answer.",
-    });
-  } finally {
-    deskRuns.delete(symbol);
+    debate.errors.push(`archive: ${error instanceof Error ? error.message : "could not write debates.jsonl"}`);
   }
-}
-
-export function startDebate(ticker: string): DeskRun {
-  const symbol = normalizeYahooTicker(ticker);
-  if (deskRuns.has(symbol)) {
-    return readDeskRun(symbol) ?? { ticker: symbol, state: "running", started: new Date().toISOString() };
-  }
-  const run: DeskRun = { ticker: symbol, state: "running", started: new Date().toISOString() };
-  deskRuns.add(symbol);
-  writeRun(run);
-  void finishDebate(symbol, run.started);
-  return run;
+  const known = findCompany(symbol);
+  debate.name = known?.name ?? tape?.name ?? symbol;
+  debate.sector = debate.company?.sector || known?.sector || "Unlisted";
+  debate.indexName = known?.index ?? "Tape";
+  debate.source = "desk";
+  debate.model = process.env.LLM_MODEL || "qwen3.5:9b";
+  if (tape) {
+    const archivedHeads = debate.tape.headlines;
+    debate.tape = tape;
+    if (archivedHeads.length) debate.tape.headlines = archivedHeads;
+  } else debate.tape.name = debate.name;
+  return debate;
 }

@@ -1,11 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { appendChinese, loadChinese } from "../src/lib/chinese.mjs";
 import { finalNote } from "../src/lib/final-note.mjs";
-import { splitChunks } from "../src/lib/translate.mjs";
 import {
   cpiYoyFromBls,
   effrFromNyFed,
@@ -16,26 +11,6 @@ import {
   transcriptLinksFromHtml,
   multiplesFromFigures,
 } from "../src/lib/debate-job.mjs";
-
-test("chinese notes are appended one section at a time", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mole-zh-"));
-  const previous = process.env.MOLE_DATA;
-  process.env.MOLE_DATA = dir;
-  appendChinese({ ticker: "NVDA", section: "judge", as_of: "2026-10-10", zh: { summary: "看好" } });
-  appendChinese({ ticker: "NVDA", section: "bull", as_of: "2026-10-10", zh: { summary: "增长", argument: "", points: [], verdict: "" } });
-  const saved = loadChinese("NVDA");
-  assert.equal(saved.judge.summary, "看好");
-  assert.equal(saved.bull.summary, "增长");
-  if (previous == null) delete process.env.MOLE_DATA;
-  else process.env.MOLE_DATA = previous;
-});
-
-test("a long note is translated in short pieces", () => {
-  const chunks = splitChunks(`${"A".repeat(800)}. ${"B".repeat(800)}`, 1000);
-  assert.equal(chunks.length, 2);
-  assert.ok(chunks[0].length <= 1000);
-  assert.ok(chunks[1].startsWith("B"));
-});
 
 test("displayed notes drop the thinking process", () => {
   const note = finalNote("<think>scratch this</think>\n**Thinking Process:**\nThe multiple might be high.\n\n**Final answer:**\nThe shares look expensive at 50 times earnings.");

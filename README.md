@@ -4,7 +4,7 @@ A web desk for one ticker at a time. Opening a name shows the last note. If ther
 
 The page shows the company tape (price, multiples, market cap), the headlines those seats read, and the debate. Notes land in `data/debates.jsonl`.
 
-Ollama is not part of this Compose file. It should already be running at `192.168.86.35:11434`, model `qwen3.5:9b`. Seats are sent two at a time. Each reply is capped at 4,096 tokens and the prompt is cut to stay inside a 65,536-token window. SearXNG is expected at `192.168.86.35:8099`.
+Ollama is not part of this Compose file. It should already be running on this Ubuntu server at `127.0.0.1:11434`, model `qwen3.5:9b`. Seats are sent two at a time. Each reply is capped at 4,096 tokens and the prompt is cut to stay inside a 65,536-token window. SearXNG is expected at `192.168.86.35:8099`.
 
 Mole-Intel-Debate is merged here. Do not start an Ollama service from that repo.
 
@@ -15,7 +15,7 @@ git pull
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:8090`. The header toggle switches the site between English and Simplified Chinese. Chinese is stored in `data/chinese.jsonl`, one section per line. Each section shows up as soon as its line is written.
+Open `http://127.0.0.1:8090`.
 
 Optional keys, before compose:
 
@@ -36,7 +36,7 @@ git pull
 docker compose up --build -d
 ```
 
-Ollama still has to be listening at `192.168.86.35:11434` before 11pm. Watch the wait with `docker compose logs -f desk`.
+Ollama still has to be listening at `127.0.0.1:11434` before 11pm. Watch the wait with `docker compose logs -f desk`.
 
 To run a short pass now, without waiting for 11pm:
 

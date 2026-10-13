@@ -19,7 +19,6 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendChinese, loadChinese, setChineseCurrent } from "./chinese.mjs";
 import { finalNote } from "./final-note.mjs";
 import { linkHost, normalizeYahooTicker, safeHttpUrl } from "./yahoo-ticker.mjs";
 
@@ -50,7 +49,7 @@ function loadDeskSecrets() {
 
 loadDeskSecrets();
 
-const BASE_URL = (process.env.LLM_BASE_URL || "http://192.168.86.35:11434/v1").replace(/\/$/, "");
+const BASE_URL = (process.env.LLM_BASE_URL || "http://127.0.0.1:11434/v1").replace(/\/$/, "");
 const MODEL = process.env.LLM_MODEL || "qwen3.5:9b";
 const DATA_DIR = process.env.MOLE_DATA || path.join(process.cwd(), "data");
 const PYTHON = process.env.PYTHON || "python3";
@@ -99,7 +98,7 @@ const AGENTS = {
 const CONTEXT = Number(process.env.LLM_CONTEXT || 65536);
 const MAX_OUTPUT = 4096;
 const LLM_WAIT_MS = 30 * 60 * 1000;
-const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 1));
+const LLM_CONCURRENCY = Math.max(1, Number(process.env.LLM_CONCURRENCY || 2));
 
 function llmPost(url, body) {
   const target = new URL(url);
@@ -176,11 +175,6 @@ async function chat(system, user, { maxTokens = MAX_OUTPUT } = {}) {
     } catch (error) {
       const cause = error?.cause;
       const detail = cause?.code || cause?.message || error?.message || "fetch failed";
-      const retryable = /ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|fetch failed|TIMEOUT|EPIPE/i.test(String(detail));
-      if (retryable && attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
-        continue;
-      }
       throw new Error(`LLM unreachable at ${BASE_URL} (${detail})`);
     }
     const raw = res.text;
@@ -1413,49 +1407,7 @@ function noteForJudge(seat) {
   return { ok: true, note: text.slice(0, 6000) || "This seat did not write a note." };
 }
 
-async function zhText(text) {
-  const { translateText } = await import("./translate.mjs");
-  return translateText(text);
-}
-
-async function sectionText(value) {
-  if (!value || typeof value !== "object") return "";
-  const note = value.note && typeof value.note === "object" ? value.note : value.ok === false ? null : value;
-  if (!note || typeof note !== "object") return "";
-  const parts = [];
-  for (const key of ["summary", "thesis", "argument", "fundamental_impact", "verdict", "consensus"]) {
-    if (typeof note[key] === "string" && note[key].trim()) parts.push(note[key].trim());
-  }
-  for (const key of ["points", "bull_points", "bullPoints", "bear_points", "bearPoints", "open_questions", "openQuestions"]) {
-    if (!Array.isArray(note[key])) continue;
-    for (const item of note[key]) if (typeof item === "string" && item.trim()) parts.push(item.trim());
-  }
-  return parts.join("\n\n");
-}
-
-export async function attachChinese(result) {
-  const symbol = result?.ticker || "";
-  const saved = loadChinese(symbol);
-  const agents = result?.agents || {};
-  for (const label of ["judge", "news", "bull", "bear", "valuation", "earnings", "analyst"]) {
-    if (saved[label]?.text) continue;
-    const source = await sectionText(label === "judge" ? result?.judge : agents[label]);
-    if (!source) continue;
-    setChineseCurrent(symbol, label);
-    try {
-      const text = (await zhText(source)).trim();
-      if (!text) continue;
-      appendChinese({ ticker: symbol, section: label, as_of: new Date().toISOString(), zh: { text } });
-      saved[label] = { text };
-    } catch (error) {
-      console.error(`ZH ${symbol} ${label}: ${error instanceof Error ? error.message : error}`);
-    }
-  }
-  setChineseCurrent(symbol, "");
-  return result;
-}
-
-async function debateOne(ticker, options = {}) {
+async function debateOne(ticker) {
   const symbol = normalizeYahooTicker(ticker);
   const packet = await buildPacket(symbol);
   const { news: headlines, ...deskPacket } = packet;
@@ -1501,7 +1453,7 @@ async function debateOne(ticker, options = {}) {
       news: noteForJudge(news),
     },
   });
-  const result = {
+  return {
     ticker: symbol,
     as_of: packet.as_of,
     model: MODEL,
@@ -1511,8 +1463,6 @@ async function debateOne(ticker, options = {}) {
     agents: { bull, bear, valuation, earnings, analyst, news },
     judge,
   };
-  if (options.bilingual !== false) await attachChinese(result);
-  return result;
 }
 
 // ---------- Archive ----------

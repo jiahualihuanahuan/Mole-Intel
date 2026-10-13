@@ -25,8 +25,6 @@ test("desk image includes the ticker module the job imports", () => {
   const docker = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(docker, /yahoo-ticker\.mjs/);
   assert.match(docker, /final-note\.mjs/);
-  assert.match(docker, /translate\.mjs/);
-  assert.match(docker, /chinese\.mjs/);
 });
 
 test("news seat is sent to the model and shown on the page", () => {
@@ -36,25 +34,18 @@ test("news seat is sent to the model and shown on the page", () => {
   assert.match(job, /ask\("news", newsPacket\)/);
   assert.match(job, /packet\.fundamentals/);
   assert.match(job, /qwen3\.5:9b/);
-  assert.match(job, /192\.168\.86\.35:11434/);
+  assert.match(job, /127\.0\.0\.1:11434/);
   assert.match(job, /65536/);
   assert.match(job, /const MAX_OUTPUT = 4096/);
-  assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /192\.168\.86\.35:11434/);
+  assert.match(fs.readFileSync(new URL("../README.md", import.meta.url), "utf8"), /127\.0\.0\.1:11434/);
   assert.match(job, /timeout: LLM_WAIT_MS/);
-  assert.match(job, /LLM_CONCURRENCY \|\| 1/);
+  assert.match(job, /LLM_CONCURRENCY \|\| 2/);
   assert.equal(job.includes("one JSON object"), false);
   assert.match(job, /max_tokens: fitted\.output/);
   assert.match(job, /truncated to fit the context window/);
   assert.equal(job.includes("ask(\"bull\", packet)"), false);
-  const i18n = fs.readFileSync(new URL("../src/lib/i18n.tsx", import.meta.url), "utf8");
-  assert.match(i18n, /news: "新闻"/);
-  assert.match(i18n, /Six seats/);
-  assert.match(page, /setLang\(lang === "en" \? "zh" : "en"\)/);
-  assert.match(fs.readFileSync(new URL("../src/lib/chinese.mjs", import.meta.url), "utf8"), /chinese\.jsonl/);
-  assert.match(page, /readChineseFn/);
-  assert.match(page, /startDebateFn/);
-  assert.match(page, /debateRunFn/);
-  assert.equal(page.includes("runDebateFn"), false);
+  assert.match(page, /news: "News"/);
+  assert.match(page, /Six seats/);
   assert.equal(job.includes("ask(\"macro\""), false);
   assert.equal(page.includes("Thinking</summary>"), false);
   assert.match(archive, /"news"/);
